@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <title>勤怠管理</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <div class="app">
+      <div class="header">
+        <div>
+          <h1>勤怠管理デモ</h1>
+          <p class="sub">打刻と当日の勤務時間をすぐに確認できます。</p>
+        </div>
+        <div class="today" id="today-label"></div>
+      </div>
+      
+      <div id="login-panel" class="panel login-panel">
+        <div class="login-header">
+          <div>
+            <p class="panel-title">ログイン</p>
+            <p class="login-hint">ユーザー名でログインすると打刻が有効になります。</p>
+          </div>
+          <div class="login-badge">安全なデモ</div>
+        </div>
+        <label class="login-label" for="login-name">ユーザー名</label>
+        <div class="login-field">
+          <input id="login-name" type="text" placeholder="例：瀬良 仁" autocomplete="username" />
+          <label class="login-label" for="login-pin">PIN (4桁)</label>
+          <div class="login-field">
+            <input id="login-pin" type="password" inputmode="numeric" maxlength="4" placeholder="例： 1234" autocomplete="one-time-code" />
+          </div>
+        </div>
+        <div class="login-actions">
+          <button class="primary" onclick="login()">ログイン</button>
+          <button class="secondary" onclick="logout()">ログアウト</button>
+        </div>
+      </div>
+
+      <div class="user-input">
+        <div class="user-row">
+          <label for="user-name">ユーザー名</label>
+          <input id="user-name" type="text" value="瀬良 仁" />
+        </div>
+        <div class="user-actions">
+          <span class="login-state" id="login-state"></span>
+          <button class="secondary" onclick="logout()">ログアウト</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" onclick="callApi('/clock-in')">出勤</button>
+        <button class="secondary" onclick="callApi('/break-start')">休憩開始</button>
+        <button class="secondary" onclick="callApi('/break-end')">休憩終了</button>
+        <button class="accent" onclick="callApi('/clock-out')">退勤</button>
+      </div>
+
+      <div class="panel">
+        <p class="panel-title">操作ステータス</p>
+        <div id="status">準備完了</div>
+      </div>
+
+      <div class="panel">
+        <p class="panel-title">現在の状態</p>
+        <div id="current-state">取得中...</div>
+        <div id="location-info" style="font-size: 13px; color: #555;"></div>
+      </div>
+
+      <div class="panel">
+        <p class="panel-title">今日の勤務時間</p>
+        <div class="result" id="result">まだ計算されていません</div>
+        <div class="footer">
+          <button class="secondary" onclick="loadWorkTime()">勤務時間を更新</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <p class="panel-title">今日のログ</p>
+        <table>
+          <thead>
+            <tr>
+              <th>ユーザー</th>
+              <th>アクション</th>
+              <th>時刻</th>
+            </tr>
+          </thead>
+          <tbody id="log-table"></tbody>
+        </table>
+        <div class="footer">
+          <button class="secondary" onclick="loadLogs()">ログを更新</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

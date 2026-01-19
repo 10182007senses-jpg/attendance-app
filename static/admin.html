@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <title>勤怠管理 | 管理者</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/static/style.css">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <style>
+      .admin-controls .field-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        align-items: start;
+      }
+      .admin-controls input,
+      .admin-controls select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 15px;
+      }
+      .admin-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        align-items: center;
+        grid-column: 1 / -1;
+      }
+      .admin-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 18px;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .status.ok { color: var(--accent); }
+      .status.error { color: #b54836; }
+      .hint {
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .admin-login {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .admin-login .status-row {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+      }
+      .admin-login .action-row {
+        display: flex;
+        align-items: center;
+        width: 100%;
+      }
+      #login-state {
+        display: inline-block;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .admin-login .action-row button {
+        width: 100%;
+      }
+      @media (min-width: 720px) {
+        .admin-login {
+          flex-direction: row;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .admin-login .status-row {
+          flex: 1;
+        }
+        .admin-login .action-row {
+          width: auto;
+          justify-content: flex-end;
+        }
+        .admin-login .action-row button {
+          width: auto;
+        }
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #f8efe1;
+        border: 1px solid #e8dcc8;
+        color: #8d6a46;
+      }
+      .pill {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #f2f6f5;
+        color: var(--accent);
+        border: 1px solid #d9e4e1;
+        display: inline-block;
+      }
+      .table-compact td,
+      .table-compact th {
+        padding: 8px 6px;
+      }
+      .detail-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .detail-panel-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .detail-reset {
+        padding: 6px 12px;
+        font-size: 12px;
+        border-radius: 999px;
+      }
+      .detail-toggle {
+        padding: 6px 12px;
+        font-size: 12px;
+        border-radius: 999px;
+      }
+      .detail-summary {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      .action-cell {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .action-toggle {
+        background: none;
+        border: none;
+        padding: 0;
+        font-size: 12px;
+        color: var(--accent);
+        cursor: pointer;
+        box-shadow: none;
+        transform: none;
+      }
+      .action-toggle:hover {
+        text-decoration: underline;
+        box-shadow: none;
+        transform: none;
+      }
+      .map-wrap {
+        position: relative;
+        height: 300px;
+        border-radius: 16px;
+        border: 1px solid #efe5d6;
+        background: radial-gradient(circle at 15% 20%, #fff4dd 0%, transparent 55%),
+          linear-gradient(135deg, #f7efe1 0%, #eef4f2 100%);
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+      }
+      #map-canvas {
+        height: 100%;
+        width: 100%;
+        border-radius: 16px;
+      }
+      .map-msg {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: 14px;
+        padding: 12px;
+        text-align: center;
+        background: transparent;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="header">
+        <div>
+          <h1>管理者ダッシュボード</h1>
+          <p class="sub">月次集計、異常ログ、CSV出力をまとめて確認。</p>
+        </div>
+        <div class="today" id="today-label"></div>
+      </div>
+
+      <div id="login-panel" class="panel login-panel">
+        <div class="login-header">
+          <div>
+            <p class="panel-title">管理者ログイン</p>
+            <p class="login-hint">管理者アカウントでログインしてください。</p>
+          </div>
+          <div class="login-badge">Admin Only</div>
+        </div>
+        <label class="login-label" for="login-name">ユーザー名</label>
+        <div class="login-field">
+          <input id="login-name" type="text" placeholder="例：管理 太郎" autocomplete="username" />
+        </div>
+        <label class="login-label" for="login-pin">PIN (4桁)</label>
+        <div class="login-field">
+          <input id="login-pin" type="password" inputmode="numeric" maxlength="4" placeholder="例： 1234" autocomplete="one-time-code" />
+        </div>
+        <div class="login-actions">
+          <button class="primary" onclick="login()">ログイン</button>
+          <button class="secondary" onclick="logout()">ログアウト</button>
+        </div>
+      </div>
+
+      <div class="panel admin-controls">
+        <div class="hint admin-login">
+          <div class="status-row">
+            <span class="pill" id="login-state">未ログイン</span>
+          </div>
+          <div class="action-row">
+            <button class="secondary" id="logout-btn">ログアウト</button>
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label class="login-label" for="month-input">対象月</label>
+            <input id="month-input" type="month" />
+          </div>
+          <div>
+            <label class="login-label" for="user-select">ユーザー</label>
+            <select id="user-select">
+              <option value="">ユーザーを選択</option>
+            </select>
+          </div>
+          <div class="admin-actions">
+            <button class="primary" id="refresh-btn">集計を更新</button>
+            <button class="secondary" id="detail-btn">詳細を表示</button>
+            <button class="accent" id="csv-btn">CSVダウンロード</button>
+            <button class="accent" id="detail-csv-btn">CSVダウンロード（月次）</button>            
+            <button class="accent" id="raw-csv-btn">生ログCSV</button>
+          </div>
+        </div>
+        <div id="status" class="status">準備完了</div>
+      </div>
+
+      <div class="admin-grid">
+        <div class="panel">
+          <p class="panel-title">月次サマリー</p>
+          <table class="table-compact">
+            <thead>
+              <tr>
+                <th>ユーザー</th>
+                <th>稼働日</th>
+                <th>正常</th>
+                <th>不整合</th>
+                <th>未退勤</th>
+                <th>実働</th>
+              </tr>
+            </thead>
+            <tbody id="summary-table"></tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <div class="detail-panel-header">
+            <p class="panel-title">ユーザー詳細</p>
+            <div class="detail-panel-actions">
+              <button class="secondary detail-toggle" id="detail-toggle-btn" type="button">折りたたむ</button>
+              <button class="secondary detail-reset" id="detail-reset-btn" type="button">表示をリセット</button>
+            </div>
+          </div>
+          <div id="detail-header" class="hint">ユーザーを選択して詳細を表示します。</div>
+          <div id="detail-summary" class="detail-summary"></div>
+          <div id="detail-content">
+            <table class="table-compact">
+              <thead>
+                <tr>
+                  <th>日付</th>
+                  <th>開始</th>
+                  <th>終了</th>
+                  <th>実働</th>
+                  <th>休憩</th>
+                  <th>打刻</th>
+                </tr>
+              </thead>
+              <tbody id="detail-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <p class="panel-title">打刻位置マップ</p>
+        <div class="hint">最新の打刻位置を地図で確認できます。</div>
+        <div id="map" class="map-wrap">
+          <div id="map-canvas"></div>
+          <div id="map-msg" class="map-msg">地図を読み込み中...</div>
+        </div>
+      </div>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script>
+      let map = null;
+      let mapMarkers = null;
+      const MAX_ACTION_CHARS = 40;
+      const expandedActionRows = new Map();
+      let lastDetailData = null;
+      let isDetailExpanded = true;
+
+      function setMapMessage(msg) {
+        const msgEl = document.getElementById("map-msg");
+        if (!msgEl) return;
+        if (!msg) {
+          msgEl.classList.add("hidden");
+          msgEl.textContent = "";
+          return;
+        }
+        msgEl.textContent = msg;
+        msgEl.classList.remove("hidden");
+      }
+
+      function destroyMap() {
+        if (map) {
+          map.remove();
+        }
+        map = null;
+        mapMarkers = null;
+
+        const canvas = document.getElementById("map-canvas");
+        if (canvas && canvas.parentNode) {
+          const fresh = document.createElement("div");
+          fresh.id = "map-canvas";
+          fresh.style.height = "100%";
+          fresh.style.width = "100%";
+          fresh.style.borderRadius = "16px";
+          canvas.parentNode.replaceChild(fresh, canvas);
+        }
+      }
+
+      function ensureMap() {
+        if (map) return;
+        map = L.map("map-canvas").setView([35.9251, 139.4857], 14);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap contributors",
+        }).addTo(map);
+        mapMarkers = L.layerGroup().addTo(map);
+      }
+
+      function updateMap(points) {
+        const valid = (points || []).filter(p => typeof p.lat === "number" && typeof p.lon === "number");
+        if (valid.length === 0) {
+          destroyMap();
+          setMapMessage("位置情報がないため地図は表示できません。");
+          return;
+        }
+
+        setMapMessage("");
+        ensureMap();
+        if (!mapMarkers && map) {
+          mapMarkers = L.layerGroup().addTo(map);
+        }
+        if (!map || !mapMarkers) return;
+
+        mapMarkers.clearLayers();
+        valid.forEach(a => {
+          L.marker([a.lat, a.lon])
+            .addTo(mapMarkers)
+            .bindPopup(`${a.action} ${a.time}`);
+        });
+
+        if (valid.length === 1) {
+          map.setView([valid[0].lat, valid[0].lon], 14);
+        } else {
+          const bounds = L.latLngBounds(valid.map(p => [p.lat, p.lon]));
+          map.fitBounds(bounds, { padding: [24, 24] });
+        }
+        requestAnimationFrame(() => map.invalidateSize());
+      }
+
+      function isLoggedIn() {
+        return !!sessionStorage.getItem("session");
+      }
+
+      function authHeaders() {
+        const session = sessionStorage.getItem("session");
+        return session ? { "Authorization": `Bearer ${session}` } : {};
+      }
+
+      async function login() {
+        const name = document.getElementById("login-name").value.trim();
+        const pin = document.getElementById("login-pin").value.trim();
+        if (!name || !pin) {
+          setStatus("ユーザー名とPINを入力してください", "error");
+          return;
+        }
+
+        setStatus("ログイン中...");
+        try {
+          const res = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user: name, pin: pin })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            sessionStorage.setItem("session", data.session);
+            sessionStorage.setItem("user", data.user);
+            sessionStorage.setItem("role", data.role || "");
+            if (data.role !== "admin") {
+              setStatus("管理者権限がありません", "error");
+              await logout();
+              return;
+            }
+            setStatus(`${data.user}でログインしました`, "ok");
+            applyLoginState();
+            await loadSummary();
+          } else {
+            setStatus(data.error || "ログインできませんでした", "error");
+          }
+        } catch (_) {
+          setStatus("通信エラーが発生しました", "error");
+        }
+      }
+
+      async function logout() {
+        const session = sessionStorage.getItem("session");
+        try {
+          if (session) {
+            await fetch("/logout", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${session}` }
+            });
+          }
+        } catch (_) {
+        } finally {
+          sessionStorage.removeItem("session");
+          sessionStorage.removeItem("user");
+          location.reload();
+        }
+      }
+
+      function applyLoginState() {
+        const loginPanel = document.getElementById("login-panel");
+        const loginState = document.getElementById("login-state");
+        const logoutBtn = document.getElementById("logout-btn");
+        const loginName = document.getElementById("login-name");
+        const loginPin = document.getElementById("login-pin");
+        const user = sessionStorage.getItem("user");
+
+        if (isLoggedIn()) {
+          loginPanel.style.display = "none";
+          loginState.innerText = `${user}でログイン中`;
+          if (logoutBtn) logoutBtn.disabled = false;
+          if (loginName) loginName.readOnly = true;
+          if (loginPin) loginPin.readOnly = true;
+        } else {
+          loginPanel.style.display = "block";
+          loginState.innerText = "未ログイン";
+          if (logoutBtn) logoutBtn.disabled = true;
+          if (loginName) loginName.readOnly = false;
+          if (loginPin) loginPin.readOnly = false;
+          document.getElementById("summary-table").innerHTML = "";
+          document.getElementById("detail-table").innerHTML = "";
+          document.getElementById("user-select").innerHTML = "<option value=\"\">ユーザーを選択</option>";
+          document.getElementById("detail-header").innerText = "ユーザーを選択して詳細を表示します。";
+        }
+      }
+
+      async function fetchWithAuth(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: { ...(options.headers || {}), ...authHeaders() }
+        });
+
+        if (res.status === 401 || res.status === 403) {
+          setStatus("権限がありません。再ログインしてください。", "error");
+          await logout();
+          return null;
+        }
+
+        return res;
+      }
+
+      function setStatus(text, type = "info") {
+        const status = document.getElementById("status");
+        status.className = "status";
+        if (type !== "info") {
+          status.classList.add(type);
+        }
+        status.innerText = text;
+      }
+
+      function updateTodayLabel() {
+        const today = new Date();
+        const label = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
+        document.getElementById("today-label").innerText = label;
+      }
+
+      function initMonth() {
+        const now = new Date();
+        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        document.getElementById("month-input").value = month;
+      }
+
+      function buildUrl(path, params) {
+        const url = new URL(path, window.location.origin);
+        Object.entries(params || {}).forEach(([key, value]) => {
+          if (value) {
+            url.searchParams.set(key, value);
+          }
+        });
+        return url.pathname + url.search;
+      }
+
+      function renderSummary(rows) {
+        const table = document.getElementById("summary-table");
+        table.innerHTML = "";
+        if (!rows || rows.length === 0) {
+          table.innerHTML = "<tr><td colspan=\"6\">データがありません。</td></tr>";
+          return;
+        }
+        rows.forEach(row => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.user}</td>
+            <td>${row.work_days_with_logs}</td>
+            <td>${row.ok_days}</td>
+            <td>${row.inconsistent_days}</td>
+            <td>${row.open_days}</td>
+            <td>${row.total_net}</td>
+          `;
+          table.appendChild(tr);
+        });
+      }
+
+      function updateUserSelect(rows) {
+        const select = document.getElementById("user-select");
+        const current = select.value;
+        select.innerHTML = "<option value=\"\">ユーザーを選択</option>";
+        rows.forEach(row => {
+          const opt = document.createElement("option");
+          opt.value = row.user;
+          opt.textContent = row.user;
+          select.appendChild(opt);
+        });
+        if (current) {
+          select.value = current;
+        }
+      }
+
+      async function loadSummary() {
+        if (!isLoggedIn()) {
+          setStatus("ログインしてください", "error");
+          return;
+        }
+        const month = document.getElementById("month-input").value;
+        if (!month) {
+          setStatus("対象月を選択してください", "error");
+          return;
+        }
+
+        setStatus("集計を取得中...");
+        const res = await fetchWithAuth(buildUrl("/admin/month-summary", { month }));
+        if (!res) return;
+
+        const data = await res.json();
+        if (data.error) {
+          setStatus(data.error, "error");
+          return;
+        }
+        renderSummary(data.rows || []);
+        updateUserSelect(data.rows || []);
+        setStatus("集計を更新しました", "ok");
+      }
+
+      function formatActions(actions) {
+        if (!actions || actions.length === 0) return "-";
+        return actions.map(a => `${a.action} ${a.time}`).join(" / ");
+      }
+
+      function truncateActions(text) {
+        if (text.length <= MAX_ACTION_CHARS) {
+          return { text, truncated: false };
+        }
+        return { text: `${text.slice(0, MAX_ACTION_CHARS)}…`, truncated: true };
+      }
+
+      function renderDetail(data) {
+        const table = document.getElementById("detail-table");
+        const summaryEl = document.getElementById("detail-summary");
+        table.innerHTML = "";
+
+        if (!data || !data.details || data.details.length === 0) {
+          table.innerHTML = "<tr><td colspan=\"6\">詳細がありません。</td></tr>";
+          if (summaryEl) summaryEl.innerText = "";
+          updateMap([]);
+          return;
+        }
+       
+        const allActions = [];
+        data.details.forEach(d => {
+          d.action.forEach(a => {
+            if (typeof a.lat === "number" && typeof a.lon === "number") {
+              allActions.push(a);
+            }
+          });
+        });
+        updateMap(allActions);
+        
+        let okCount = 0;
+        let ngCount = 0;
+
+        data.details.forEach(day => {
+          if (day.ok) {
+            okCount += 1;
+          } else {
+            ngCount += 1;
+          }
+          const key = day.date;
+          const fullActions = formatActions(day.action);
+          const isExpanded = expandedActionRows.get(key) === true;
+          const truncated = truncateActions(fullActions);
+          const displayActions = isExpanded ? fullActions : truncated.text;
+          const showToggle = fullActions !== "-" && (truncated.truncated || isExpanded);
+          const toggleLabel = isExpanded ? "折りたたむ" : "もっと見る";
+
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${day.date}</td>
+            <td>${day.start || "-"}</td>
+            <td>${day.end || "-"}</td>
+            <td>${day.net}</td>
+            <td>${day.break}</td>
+            <td>
+              <div class="action-cell">
+                <span class="action-text">${displayActions}</span>
+                ${showToggle ? `<button class="action-toggle" data-action="toggle-action" data-date="${key}">${toggleLabel}</button>` : ""}
+              </div>
+            </td>
+          `;
+          table.appendChild(tr);
+        });
+
+        if (summaryEl) {
+          summaryEl.innerText = `全${data.details.length}日（OK:${okCount} / 不整合:${ngCount}）`;
+        }
+      }
+
+      async function loadUserDetail() {
+        if (!isLoggedIn()) {
+          setStatus("ログインしてください", "error");
+          return;
+        }
+        const month = document.getElementById("month-input").value;
+        const user = document.getElementById("user-select").value;
+        if (!month || !user) {
+          setStatus("対象月とユーザーを選択してください", "error");
+          return;
+        }
+
+        setStatus("詳細を取得中...");
+        const res = await fetchWithAuth(buildUrl("/admin/user-detail", { month, user }));
+        if (!res) return;
+
+        const data = await res.json();
+        if (data.error) {
+          setStatus(data.error, "error");
+          return;
+        }
+        expandedActionRows.clear();
+        lastDetailData = data;
+        isDetailExpanded = true;
+        updateDetailPanelState();
+        document.getElementById("detail-header").innerText = `${data.user} / ${data.month}`;
+        renderDetail(data);
+        setStatus("詳細を更新しました", "ok");
+      }
+
+      async function downloadCsv() {
+        if (!isLoggedIn()) {
+          setStatus("ログインしてください", "error");
+          return;
+        }
+        const month = document.getElementById("month-input").value;
+        if (!month) {
+          setStatus("対象月を選択してください", "error");
+          return;
+        }
+        setStatus("CSVを作成中...");
+        const res = await fetchWithAuth(buildUrl("/admin/month-summary.csv", { month }));
+        if (!res) return;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `month-summary_${month}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus("CSVをダウンロードしました", "ok");
+      }
+
+      document.getElementById("refresh-btn").addEventListener("click", loadSummary);
+      document.getElementById("detail-btn").addEventListener("click", loadUserDetail);
+
+      async function downloadDetailCsv() {
+        if (!isLoggedIn()) {
+          setStatus("ログインしてください", "error");
+          return;
+        }
+        const month = document.getElementById("month-input").value;
+        const user = document.getElementById("user-select").value;
+        if (!month || !user) {
+          setStatus("対象月とユーザーを選択してください", "error");
+          return;
+        }
+
+        setStatus("詳細CSVを作成中...");
+        const res = await fetchWithAuth(buildUrl("/admin/user-detail.csv", { month, user }));
+        if (!res) return;
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `user-detail_${month}_${user}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus("詳細CSVをダウンロードしました", "ok");
+      }
+
+      document.getElementById("detail-csv-btn").addEventListener("click", downloadDetailCsv)
+      document.getElementById("csv-btn").addEventListener("click", downloadCsv);
+
+      function updateDetailPanelState() {
+        const content = document.getElementById("detail-content");
+        const toggleBtn = document.getElementById("detail-toggle-btn");
+        if (content) {
+          content.style.display = isDetailExpanded ? "block" : "none";
+        }
+        if (toggleBtn) {
+          toggleBtn.innerText = isDetailExpanded ? "折りたたむ" : "展開";
+        }
+      }
+
+      document.getElementById("detail-toggle-btn").addEventListener("click", () => {
+        isDetailExpanded = !isDetailExpanded;
+        updateDetailPanelState();
+      });
+
+      document.getElementById("detail-reset-btn").addEventListener("click", () => {
+        expandedActionRows.clear();
+        isDetailExpanded = true;
+        updateDetailPanelState();
+        if (lastDetailData) {
+          renderDetail(lastDetailData);
+        }
+        const panel = document.getElementById("detail-header");
+        if (panel) {
+          panel.scrollIntoView({ behavior: "smooth" });
+        }
+      });
+
+      document.getElementById("detail-table").addEventListener("click", (event) => {
+        const target = event.target.closest("button[data-action='toggle-action']");
+        if (!target) return;
+        const key = target.dataset.date;
+        const current = expandedActionRows.get(key) === true;
+        expandedActionRows.set(key, !current);
+        if (lastDetailData) {
+          renderDetail(lastDetailData);
+        }
+      });
+      
+      async function downloadRawCsv() {
+        if (!isLoggedIn()) {
+          setStatus("ログインしてください", "error");
+          return;
+        }
+        const month = document.getElementById("month-input").value;
+        if (!month) {
+          setStatus("対象月を選択してください", "error");
+        }
+        const user = document.getElementById("user-select").value;
+
+        setStatus("生ログCSVを作成中...");
+        const res = await fetchWithAuth(buildUrl("/admin/raw-logs.csv", { month, user }))
+        if (!res) return;
+        
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = user ? `raw-logs_${month}_${user}.csv` : `raw-logs_${month}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        setStatus("生ログCSVをダウンロードしました", "ok");
+      }
+      
+      document.getElementById("raw-csv-btn").addEventListener("click", downloadRawCsv);
+      document.getElementById("logout-btn").addEventListener("click", logout);
+
+
+
+      async function ensureAdminSession() {
+        if (!isLoggedIn()) return false;
+
+        const res = await fetchWithAuth("/admin/ping");
+        if (!res) return false;
+
+        const data = await res.json();
+        if (!data.ok) {
+          await logout();
+          return false;
+        }
+        return true
+      }
+
+      (async () => {
+        initMonth();
+        updateTodayLabel();
+        applyLoginState();
+        
+        if (await ensureAdminSession()) {
+          loadSummary();
+        }
+      })();
+    </script>
+  </body>
+</html>

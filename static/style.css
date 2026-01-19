@@ -1,0 +1,254 @@
+
+      :root {
+        --bg-1: #f6f2e8;
+        --bg-2: #e9f1f2;
+        --ink: #222222;
+        --muted: #5c6268;
+        --card: #ffffff;
+        --accent: #2f6f5e;
+        --accent-2: #d98b5f;
+        --line: #d8d8d8;
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Yu Mincho", "Hiragino Mincho ProN", "MS Mincho", serif;
+        background: radial-gradient(circle at 10% 20%, #fff8e1 0%, transparent 45%),
+          radial-gradient(circle at 90% 10%, #e6f3f8 0%, transparent 50%),
+          linear-gradient(120deg, var(--bg-1), var(--bg-2));
+        min-height: 100vh;
+        padding: 32px 18px 48px;
+      }
+      .app {
+        max-width: 980px;
+        margin: 0 auto;
+        background: var(--card);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        padding: 28px 28px 32px;
+        animation: floatIn 0.6s ease-out;
+      }
+      .header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 18px;
+        margin-bottom: 22px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0.04em;
+      }
+      .sub {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .today {
+        font-size: 14px;
+        padding: 8px 14px;
+        background: #f3efe6;
+        border-radius: 999px;
+      }
+      .user-input {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin: 16px 0 20px;
+      }
+      .user-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .user-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .login-state {
+        font-size: 13px;
+        color: var(--muted);
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: #f3efe6;
+      }
+      .user-input label {
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .user-input input {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        min-width: 220px;
+        font-size: 15px;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+      }
+      button {
+        border: none;
+        border-radius: 12px;
+        padding: 14px 16px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+      }
+      button.primary {
+        background: var(--accent);
+        color: white;
+      }
+      button.secondary {
+        background: #f2f6f5;
+        color: var(--accent);
+        border: 1px solid #d9e4e1;
+      }
+      button.accent {
+        background: var(--accent-2);
+        color: #fffaf5;
+      }
+      button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 18px rgba(0, 0, 0, 0.08);
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      .panel {
+        margin-top: 22px;
+        padding: 16px 18px;
+        background: #faf8f2;
+        border-radius: 16px;
+        border: 1px solid #efe5d6;
+      }
+      .login-panel {
+        margin-bottom: 20px;
+        padding: 20px 22px;
+        background: linear-gradient(135deg, #fff6e9 0%, #f4f7f6 65%, #edf4f6 100%);
+        border: 1px solid #eadfce;
+        box-shadow: 0 18px 34px rgba(65, 55, 35, 0.08);
+        animation: slideIn 0.5s ease-out;
+      }
+      .login-header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+      .login-hint {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .login-badge {
+        font-size: 12px;
+        letter-spacing: 0.05em;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: #f8efe1;
+        border: 1px solid #e8dcc8;
+        color: #8d6a46;
+        white-space: nowrap;
+      }
+      .login-label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.08em;
+        margin-bottom: 8px;
+      }
+      .login-field input {
+        width: 100%;
+        border: 1px solid #e1d6c3;
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 16px;
+        background: #fffdf8;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+      }
+      .login-actions {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .panel-title {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      #status {
+        font-size: 14px;
+        color: var(--muted);
+      }
+      #status.ok {
+        color: var(--accent);
+      }
+      #status.error {
+        color: #b54836;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 14px;
+      }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        padding: 10px 6px;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .footer {
+        margin-top: 18px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .result {
+        font-size: 16px;
+        font-weight: 600;
+      }
+      @keyframes floatIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    

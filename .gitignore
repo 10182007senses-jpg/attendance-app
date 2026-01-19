@@ -1,0 +1,10 @@
+.venv/
+__pycahe__/
+*.pyc
+
+attendance.db
+attendance_log.csv
+
+*.code-workspace
+
+.DS_Store
