@@ -15,7 +15,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'attendance.db')}"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+  DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'attendance.db')}"
+
 
 engine = create_engine(
   DATABASE_URL, connect_args={"check_same_thread": False},
