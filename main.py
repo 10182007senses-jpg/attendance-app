@@ -58,6 +58,10 @@ ADMIN_FILE = os.path.join(STATIC_DIR, "admin.html")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+@app.on_event("startup")
+def startup():
+    init_db()
+
 @app.get("/admin")
 def admin_page():
   if os.path.exists(ADMIN_FILE):
