@@ -17,9 +17,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
-  DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'attendance.db')}"
+    DATABASE_URL = "sqlite:////tmp/attendance.db"
+
 
 
 engine = create_engine(
