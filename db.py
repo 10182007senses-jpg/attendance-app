@@ -18,8 +18,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
 if not DATABASE_URL:
-    DATABASE_URL = "sqlite:////tmp/attendance.db"
+    db_path = "/tmp/attendance.db"
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    DATABASE_URL = f"sqlite:///{db_path}"
 
 
 
