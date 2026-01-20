@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday
+from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine
 from security import verify_pin
 from sqlalchemy import or_
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -36,12 +36,18 @@ def cleanup_sessions(db: Session) -> int:
   deleted = q.delete(synchronize_session=False)
   db.commit()
   return deleted
+app = FastAPI()
 
-init_db()
+@app.on_event("startup")
+def startup():
+    init_db()
 
-with SessionLocal() as db:
-  deleted = cleanup_sessions(db)
-  print(f"[cleanup] deleted sessions: {deleted}")
+    db = SessionLocal()
+    try:
+      deleted = cleanup_sessions(db)
+      print(f"[startup] cleanup_sessions deleted={deleted}")
+    finally:
+      db.close()
 
 DEFAULT_USER = "瀬良 仁"
 SESSION_TTL_HOURS = 8          # 絶対期限
@@ -50,7 +56,7 @@ IDLE_TIMEOUT_MINUTES = 10   # 無操作タイムアウト（共有端末向け�
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-app = FastAPI()
+
 
 STATIC_DIR = "static"
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
@@ -58,9 +64,7 @@ ADMIN_FILE = os.path.join(STATIC_DIR, "admin.html")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-@app.on_event("startup")
-def startup():
-    init_db()
+
 
 @app.get("/admin")
 def admin_page():

@@ -1,96 +1,109 @@
 import os
 from datetime import datetime, date
 from typing import Optional
+
 from sqlalchemy import (
-  create_engine,
-  String,
-  Integer,
-  DateTime,
-  Float,
-  Boolean,
-  ForeignKey,
-  UniqueConstraint,
-  Date,
+    create_engine,
+    String,
+    Integer,
+    DateTime,
+    Float,
+    Boolean,
+    ForeignKey,
+    UniqueConstraint,
+    Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.engine import Engine
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# Renderなら Environment Variables で DATABASE_URL を渡せる
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "attendance.db")
+DEFAULT_DATABASE_URL = f"sqlite:///{DEFAULT_DB_PATH}"
 
-if not DATABASE_URL:
-    db_path = "/tmp/attendance.db"
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    DATABASE_URL = f"sqlite:///{db_path}"
-
-
-
-engine = create_engine(
-  DATABASE_URL, connect_args={"check_same_thread": False},
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine: Optional[Engine] = None
+SessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
 class Base(DeclarativeBase):
-  pass
+    pass
 
 class User(Base):
-  __tablename__ = "users"
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    pin_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="user")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-  id:Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-  name:Mapped[str] = mapped_column(String(100), unique=True, index=True)
-  pin_hash: Mapped[str] = mapped_column(String(255))
-  role: Mapped[str] = mapped_column(String(20), default="user")
-  is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-  logs: Mapped[list["AttendanceLog"]] = relationship(back_populates="user")
-  workdays: Mapped[list["Workday"]] = relationship(back_populates="user")
+    logs: Mapped[list["AttendanceLog"]] = relationship(back_populates="user")
+    workdays: Mapped[list["Workday"]] = relationship(back_populates="user")
 
 class AttendanceLog(Base):
-  __tablename__ = "attendance_logs"
+    __tablename__ = "attendance_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
-  id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-  user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    action: Mapped[str] = mapped_column(String(20), index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, index=True)
 
-  action: Mapped[str] = mapped_column(String(20), index=True)
-  ts: Mapped[datetime] = mapped_column(DateTime, index=True)
+    lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lon: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-  lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-  lon: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-  source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-  user: Mapped["User"] = relationship(back_populates="logs")
+    user: Mapped["User"] = relationship(back_populates="logs")
 
 class Workday(Base):
-  __tablename__ = "workdays"
-  __table_args__ = (
-    UniqueConstraint("user_id", "date", name="uq_workdays_user_date"),
-  )
+    __tablename__ = "workdays"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_workdays_user_date"),)
 
-  id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-  user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-  date: Mapped[date] = mapped_column(Date, index=True) # type: ignore
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)  # type: ignore
 
-  status: Mapped[str] = mapped_column(String(20), default="open")
-  created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-  updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-  user: Mapped["User"] = relationship(back_populates="workdays")
+    user: Mapped["User"] = relationship(back_populates="workdays")
 
 class Session(Base):
-  __tablename__ = "sessions"
+    __tablename__ = "sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
-  id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
-  user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
-  created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-  expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 
-  last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
-  revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    device_label: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-  device_label: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    user: Mapped["User"] = relationship()
 
-  user: Mapped["User"] = relationship()
+def init_engine() -> Engine:
+    """
+    エンジンと SessionLocal を初期化（複数回呼ばれてもOKな形）
+    """
+    global engine
+    if engine is not None:
+        return engine
 
-def init_db():
-  Base.metadata.create_all(bind=engine)
+    database_url = os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+
+    # sqlite のときだけ check_same_thread を付ける
+    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+
+    engine = create_engine(database_url, connect_args=connect_args)
+
+    # sessionmaker に bind を注入
+    SessionLocal.configure(bind=engine)
+    return engine
+
+def init_db() -> None:
+    """
+    テーブル作成。engine が未初期化なら init_engine() する。
+    """
+    eng = init_engine()
+    Base.metadata.create_all(bind=eng)
