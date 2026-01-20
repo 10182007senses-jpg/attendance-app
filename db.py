@@ -18,9 +18,16 @@ from sqlalchemy.engine import Engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Renderなら Environment Variables で DATABASE_URL を渡せる
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "attendance.db")
-DEFAULT_DATABASE_URL = f"sqlite:///{DEFAULT_DB_PATH}"
+# ローカルは attendance.db、Render free は /tmp に逃がす
+LOCAL_DB_PATH = os.path.join(BASE_DIR, "attendance.db")
+TMP_DB_PATH = "/tmp/attendance.db"
+
+DEFAULT_DATABASE_URL = (
+    f"sqlite:///{TMP_DB_PATH}"
+    if os.getenv("RENDER")  # Render で勝手に入る環境変数
+    else f"sqlite:///{LOCAL_DB_PATH}"
+)
+
 
 engine: Optional[Engine] = None
 SessionLocal = sessionmaker(autocommit=False, autoflush=False)

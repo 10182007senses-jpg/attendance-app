@@ -41,13 +41,8 @@ app = FastAPI()
 @app.on_event("startup")
 def startup():
     init_db()
-
-    db = SessionLocal()
-    try:
-      deleted = cleanup_sessions(db)
-      print(f"[startup] cleanup_sessions deleted={deleted}")
-    finally:
-      db.close()
+    with SessionLocal() as db:
+      cleanup_sessions(db)
 
 DEFAULT_USER = "瀬良 仁"
 SESSION_TTL_HOURS = 8          # 絶対期限
