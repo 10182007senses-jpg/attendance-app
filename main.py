@@ -40,9 +40,12 @@ app = FastAPI()
 
 @app.on_event("startup")
 def startup():
+    if os.getenv("RENDER"):   # Render 環境では何もしない
+        return
     init_db()
     with SessionLocal() as db:
-      cleanup_sessions(db)
+        cleanup_sessions(db)
+
 
 DEFAULT_USER = "瀬良 仁"
 SESSION_TTL_HOURS = 8          # 絶対期限
