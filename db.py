@@ -16,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.engine import Engine
 
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ローカルは attendance.db、Render free は /tmp に逃がす
@@ -29,25 +30,51 @@ DEFAULT_DATABASE_URL = (
 )
 
 
+def get_database_url() -> str:
+    """
+    優先順位:
+    1. 環境変数 DATABASE_URL
+    2. Render free 用 sqlite (/tmp)
+    3. ローカル sqlite
+    """
+    database_url = os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+
+    # 互換対応:
+    # 一部環境では postgres:// が渡ることがあるため
+    # SQLAlchemy が期待する postgresql:// に正規化する
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    return database_url
+
+
 engine: Optional[Engine] = None
 SessionLocal = sessionmaker(autocommit=False, autoflush=False)
+
 
 class Base(DeclarativeBase):
     pass
 
+
 class User(Base):
     __tablename__ = "users"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     pin_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    required_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_work_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     logs: Mapped[list["AttendanceLog"]] = relationship(back_populates="user")
     workdays: Mapped[list["Workday"]] = relationship(back_populates="user")
 
+
 class AttendanceLog(Base):
     __tablename__ = "attendance_logs"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
@@ -59,6 +86,7 @@ class AttendanceLog(Base):
     source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="logs")
+
 
 class Workday(Base):
     __tablename__ = "workdays"
@@ -74,8 +102,10 @@ class Workday(Base):
 
     user: Mapped["User"] = relationship(back_populates="workdays")
 
+
 class Session(Base):
     __tablename__ = "sessions"
+
     id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
@@ -89,24 +119,31 @@ class Session(Base):
 
     user: Mapped["User"] = relationship()
 
+
 def init_engine() -> Engine:
     """
-    エンジンと SessionLocal を初期化（複数回呼ばれてもOKな形）
+    エンジンと SessionLocal を初期化（複数回呼ばれてもOK）
     """
     global engine
     if engine is not None:
         return engine
 
-    database_url = os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+    database_url = get_database_url()
 
-    # sqlite のときだけ check_same_thread を付ける
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    if database_url.startswith("sqlite"):
+        engine = create_engine(
+            database_url,
+            connect_args={"check_same_thread": False},
+        )
+    else:
+        engine = create_engine(
+            database_url,
+            pool_pre_ping=True,
+        )
 
-    engine = create_engine(database_url, connect_args=connect_args)
-
-    # sessionmaker に bind を注入
     SessionLocal.configure(bind=engine)
     return engine
+
 
 def init_db() -> None:
     """

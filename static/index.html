@@ -50,10 +50,8 @@
       </div>
 
       <div class="actions">
-        <button class="primary" onclick="callApi('/clock-in')">出勤</button>
-        <button class="secondary" onclick="callApi('/break-start')">休憩開始</button>
-        <button class="secondary" onclick="callApi('/break-end')">休憩終了</button>
-        <button class="accent" onclick="callApi('/clock-out')">退勤</button>
+        <button class="primary" onclick="callApi('/clock-in')">入室</button>
+        <button class="accent" onclick="callApi('/clock-out')">退室</button>
       </div>
 
       <div class="panel">
@@ -73,6 +71,18 @@
         <div class="footer">
           <button class="secondary" onclick="loadWorkTime()">勤務時間を更新</button>
         </div>
+      </div>
+
+      <div class="panel">
+        <p class="panel-title">今月のサマリー</p>
+
+        <div class="result" id="month-summary-result">まだ取得していません</div>
+
+        <div class="footer" style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="secondary" onclick="loadMonthSummary()">今月のサマリーを更新</button>
+        </div>
+
+        <div id="month-summary-detail" style="margin-top:10px; font-size:13px; color:#555;"></div>
       </div>
 
       <div class="panel">

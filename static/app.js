@@ -1,6 +1,19 @@
 
       function isLoggedIn() {
-        return !!sessionStorage.getItem("session");
+        return !!sessionStorage.getItem("user");
+      }
+
+      async function bootstrapAuth() {
+        try{
+          const res = await fetch("/me", {credentials: "include"})
+          if (!res.ok) throw new Error;
+          const data = await res.json()
+          sessionStorage.setItem("user", data.user);
+          sessionStorage.setItem("role", data.role || "");
+        } catch {
+          sessionStorage.removeItem("user");
+          sessionStorage.removeItem("role");
+        }
       }
 
       async function login() {
@@ -18,14 +31,15 @@
           const res = await fetch("/login", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
+            credentials: "include",
             body: JSON.stringify({ user: name, pin: pin })
           });
           const data = await res.json();
 
           if (data.ok) {
-            sessionStorage.setItem("session", data.session);
+            sessionStorage.setItem("role", data.role || "");
             sessionStorage.setItem("user", data.user);
-            setButtonsDisabled(false);
+            setButtonsDisabled(true);
             setStatus(`${data.user}でログインしました`, "ok");
             applyLoginState();
             await loadLogs();
@@ -39,25 +53,20 @@
       }
 
       async function logout() {
-        const session = sessionStorage.getItem("session");
         try {
-          if (session) {
             await fetch("/logout", {
               method: "POST",
-              headers: { "Authorization": `Bearer ${session}` }
+              credentials: "include",
             });
-          }
-        } catch (e) {
+        } catch (_) {
         } finally {
-          sessionStorage.removeItem("session");
+          sessionStorage.removeItem("role");
           sessionStorage.removeItem("user");
           location.reload();
         }
       }
-
       function authHeaders() {
-        const session = sessionStorage.getItem("session");
-        return session ? {"Authorization": `Bearer ${session}`} : {};
+        return {};
       }
 
       function applyLoginState() {
@@ -80,6 +89,8 @@
           updateTodayLabel();
           loadLogs();
           loadCurrentState();
+          loadWorkTime();
+          loadMonthSummary();
         } else {
           loginPanel.style.display = "block";
           if (userInput) userInput.style.display = "none";
@@ -96,6 +107,9 @@
       }
 
       const DEFAULT_USER = "瀬良 仁";
+      const STATE_NOT_IN = "未入室";
+      const STATE_IN_ROOM = "在室中";
+      const STATE_UNKNOWN = "不明";
 
 
       function getUser() {
@@ -163,44 +177,45 @@
         } catch (err) {
           setStatus(err || "通信エラーが発生しました。", "error");
         } finally {
-          setButtonsDisabled(false);
+          setButtonsDisabled(true);
           await loadCurrentState();
         }
       }
 
 
+      function isKnownState(state) {
+        return state === STATE_NOT_IN || state === STATE_IN_ROOM || state === STATE_UNKNOWN;
+      }
+
       function updateButtons(state) {
         const btnIn = document.querySelector("button[onclick*='clock-in']");
         const btnOut = document.querySelector("button[onclick*='clock-out']");
-        const btnBreakStart = document.querySelector("button[onclick*='break-start']");
-        const btnBreakEnd = document.querySelector("button[onclick*='break-end']");
 
-         // 全部一旦有効
-        [btnIn, btnOut, btnBreakStart, btnBreakEnd].forEach(b => b.disabled = false);
+        [btnIn, btnOut].filter(Boolean).forEach(b => b.disabled = false);
 
-        if (state === "未出勤") {
-          btnOut.disabled = true;
-          btnBreakStart.disabled = true;
-          btnBreakEnd.disabled = true;
+        if (!isKnownState(state) || state === STATE_UNKNOWN) {
+          [btnIn, btnOut].filter(Boolean).forEach(b => b.disabled = true);
+          return;
         }
 
-        if (state === "出勤中") {
-          btnIn.disabled = true;
-          btnBreakEnd.disabled = true;
+        if (state === STATE_NOT_IN) {
+          if (btnOut) btnOut.disabled = true;
         }
 
-        if (state === "休憩中") {
-          btnIn.disabled = true;
-          btnBreakStart.disabled = true;
-          btnOut.disabled = true;
+        if (state === STATE_IN_ROOM) {
+          if (btnIn) btnIn.disabled = true;
         }
       }
 
       async function loadCurrentState() {
         setStatus("状態を取得中...");
+        updateButtons(null);
         try {
           const res = await fetchWithAuth(buildUrl("/current-state"));
-          if (!res) return;
+          if (!res) {
+            updateButtons(null);
+            return;
+          }
 
           const data = await res.json();
 
@@ -209,15 +224,16 @@
           if (data.error) {
             stateEl.innerText = "?? 状態を取得できません";
             setStatus(data.error, "error");
+            updateButtons(null);
             return;
           }
 
-          if (data.state === "出勤中") {
-            stateEl.innerText = "🟢 出勤中";
-          } else if (data.state === "休憩中") {
-            stateEl.innerText = "🟡 休憩中";
+          if (data.state === STATE_IN_ROOM) {
+            stateEl.innerText = "在室中";
+          } else if (data.state === STATE_NOT_IN) {
+            stateEl.innerText = "未入室 / 退室済み";
           } else {
-            stateEl.innerText = "🔴 未出勤 / 退勤済み";
+            stateEl.innerText = "状態不明";
           }
 
           if (data.lat && data.lon) {
@@ -227,9 +243,11 @@
           }
 
           updateButtons(data.state);
+          setStatus("状態を更新しました。", "ok");
         } catch {
           document.getElementById("current-state").innerText = "状態を取得できません"
           setStatus("状態の取得に失敗しました。", "error");
+          updateButtons(null);
         }
       }
 
@@ -240,14 +258,55 @@
           if (!res) return;
           const data = await res.json();
           const result = document.getElementById("result");
-          if (data.net_work_time) {
-            result.innerText = `実働 ${data.net_work_time}（休憩 ${data.break_time}）`;
+            if (data.net_work_time) {
+              result.innerText = `実働 ${data.net_work_time}`;
             setStatus("勤務時間を更新しました。", "ok");
           } else {
             result.innerText = data.error || "データが足りません。";
             setStatus("勤務時間を計算できませんでした。", "error");
           }
         } catch (err) {
+          setStatus("通信エラーが発生しました。", "error");
+        }
+      }
+
+      function getCurrentMonthStr() {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, "0")
+        return `${y}-${m}`;
+      }
+
+      async function loadMonthSummary() {
+        setStatus("今月のサマリーを取得中...");
+
+        try {
+          const month = getCurrentMonthStr();
+          const res = await fetchWithAuth(buildUrl("/me/month-summary", {month}));
+          if (!res) return;
+
+          const data = await res.json();
+
+          const resultEl = document.getElementById("month-summary-result");
+          const detailEl = document.getElementById("month-summary-detail");
+
+          if (data.error) {
+            resultEl.innerText = data.error;
+            if (detailEl) detailEl.innerText = "";
+            setStatus("サマリーを取得できませんでした", "error");
+            return;
+          }
+
+          resultEl.innerText =
+          `実働：${data.worked_time} / 所定：${data.required_hours}時間`;
+
+          if (detailEl) {
+            detailEl.innerText =
+            `出勤日数：${data.worked_days}日（上限 ${data.max_work_days}日） / 残り：${data.remaining_time} / 残り出勤可能日：${data.remaining_days}日`;
+          }
+
+          setStatus("今月のサマリーを更新しました", "ok");
+        } catch (e) { 
           setStatus("通信エラーが発生しました。", "error");
         }
       }
@@ -309,10 +368,14 @@
         document.getElementById("today-label").innerText = label;
       }
 
-      applyLoginState();
-      updateTodayLabel();
-      loadLogs();
-      loadCurrentState();
+      (async () => {
+        await bootstrapAuth();
+        applyLoginState();
+        updateTodayLabel();
+        loadLogs();
+        loadCurrentState();        
+      })();
+
     
 async function forceLogout(msg="セッションが切れました。再ログインしてください。") {
   const session = sessionStorage.getItem("session")
@@ -342,35 +405,21 @@ function normalizeHeaders(h) {
 }
 
 async function fetchWithAuth(url, options={}) {
-  const mergedHeaders = {
-    ...normalizeHeaders(options.headers),
-    ...authHeaders(),
-  };
-
   let res;
   try {
-    res = await fetch(url, { ...options, headers: mergedHeaders });
-  } catch (e) {
+    res = await fetch(url, {
+      ...options,
+      credentials: "include",
+      headers: {...(options.headers || {})},
+    });
+  } catch (e){
     setStatus("通信エラーが発生しました。", "error");
     return null;
   }
 
   if (res.status === 401 || res.status === 403) {
-    forceLogout("ログインが無効になりました。");
+    await forceLogout("ログインが無効になりました。");
     return null;
   }
-
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    const clone = res.clone();
-    try {
-      const body = await clone.json();
-      if (body && (body.detail === "未ログイン" || body.error === "未ログイン" || body.errorA)) {
-        forceLogout("ログインが無効になりました。");
-        return null;
-      }
-    } catch (_) {}
-  }
-
-  return res;
-}
+  return res
+};

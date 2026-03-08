@@ -14,9 +14,9 @@
     <style>
       .admin-controls .field-row {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 12px;
-        align-items: start;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        align-items: stretch;
       }
       .admin-controls input,
       .admin-controls select {
@@ -28,15 +28,15 @@
       }
       .admin-actions {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
         align-items: center;
         grid-column: 1 / -1;
       }
       .admin-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 20px;
       }
       .status {
         margin-top: 10px;
@@ -90,6 +90,11 @@
         }
         .admin-login .action-row button {
           width: auto;
+        }
+      }
+      @media (min-width: 900px) {
+        .admin-controls .field-row > .panel {
+          grid-column: span 2;
         }
       }
       .badge {
@@ -246,12 +251,36 @@
               <option value="">ユーザーを選択</option>
             </select>
           </div>
+          <div class="panel">
+            <p class="panel-title">ユーザー別 勤務条件設定</p>
+
+            <div class="field-row">
+              <div>
+                <label class="login-label">所定労働時間（月・時間）</label>
+                <input id="required-hours-input" type="number" min="0" step="0.5" placeholder="例：160">
+              </div>
+
+              <div>
+                <label class="login-label">最大出勤日（月）</label>
+                <input id="max-work-days-input" type="number" min="0" step="1" placeholder="例：20">
+              </div>
+
+              <div class="admin-actions">
+                <button class="secondary" id="load-settings-btn">読み込み</button>
+                <button class="primary" id="save-settings-btn">保存</button>
+              </div>
+            </div>
+
+            <div class="status" id="settings-status"></div>
+          </div>
+
           <div class="admin-actions">
             <button class="primary" id="refresh-btn">集計を更新</button>
             <button class="secondary" id="detail-btn">詳細を表示</button>
-            <button class="accent" id="csv-btn">CSVダウンロード</button>
-            <button class="accent" id="detail-csv-btn">CSVダウンロード（月次）</button>            
-            <button class="accent" id="raw-csv-btn">生ログCSV</button>
+            <button class="accent" id="csv-btn" style="display: none;">CSVダウンロード</button>
+            <button class="accent" id="detail-csv-btn" style="display: none;">CSVダウンロード（月次）</button>            
+            <button class="accent" id="raw-csv-btn" style="display: none;">生ログCSV</button>
+            <button class="accent" id="excel-btn">Excel (印刷・サイン用)</button>
           </div>
         </div>
         <div id="status" class="status">準備完了</div>
@@ -267,13 +296,64 @@
                 <th>稼働日</th>
                 <th>正常</th>
                 <th>不整合</th>
-                <th>未退勤</th>
+                <th>未退室</th>
                 <th>実働</th>
               </tr>
             </thead>
             <tbody id="summary-table"></tbody>
           </table>
         </div>
+
+        <div class="panel">
+          <div class="detail-panel-header">
+            <p class="panel-title">ユーザー管理</p>
+            <div class="detail-panel-actions">
+              <button class="secondary detail-toggle" id="user-toggle-btn" type="button">折りたたむ</button>
+            </div>
+          </div>
+          <div class="hint">ユーザー追加 / 無効化 / 権限変更 / PIN再設定</div>
+
+          <div id="user-panel-content">
+            <div class="field-row">
+              <div>
+                <label class="login-label">ユーザー名</label>
+                <input id="new-user-name" type="text" placeholder="例：山田 太郎" />
+              </div>
+              <div>
+                <label class="login-label">PIN (4桁など)</label>
+                <input id="new-user-pin" type="password" inputmode="numeric" />
+              </div>
+              <div>
+                <label class="login-label">権限</label>
+                <select id="new-user-role">
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+
+              <div class="admin-actions">
+                <button class="primary" id="create-user-btn">ユーザー追加</button>
+                <button class="secondary" id="reload-users-btn">一覧を更新</button>
+              </div>
+            </div>
+
+            <div class="status" id="users-status"></div>
+
+            <table class="table-compact" style="margin-top: 12px;">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>ユーザー</th>
+                  <th>権限</th>
+                  <th>状態</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="users-table"></tbody>
+            </table>
+          </div>
+        </div>
+
 
         <div class="panel">
           <div class="detail-panel-header">
@@ -293,7 +373,6 @@
                   <th>開始</th>
                   <th>終了</th>
                   <th>実働</th>
-                  <th>休憩</th>
                   <th>打刻</th>
                 </tr>
               </thead>
@@ -325,6 +404,7 @@
       const expandedActionRows = new Map();
       let lastDetailData = null;
       let isDetailExpanded = true;
+      let isUserPanelExpanded = true;
 
       function setMapMessage(msg) {
         const msgEl = document.getElementById("map-msg");
@@ -397,12 +477,11 @@
       }
 
       function isLoggedIn() {
-        return !!sessionStorage.getItem("session");
+        return !!sessionStorage.getItem("user");
       }
 
       function authHeaders() {
-        const session = sessionStorage.getItem("session");
-        return session ? { "Authorization": `Bearer ${session}` } : {};
+        return {};
       }
 
       async function login() {
@@ -418,11 +497,11 @@
           const res = await fetch("/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            credentials: "include",
             body: JSON.stringify({ user: name, pin: pin })
           });
           const data = await res.json();
           if (data.ok) {
-            sessionStorage.setItem("session", data.session);
             sessionStorage.setItem("user", data.user);
             sessionStorage.setItem("role", data.role || "");
             if (data.role !== "admin") {
@@ -442,17 +521,16 @@
       }
 
       async function logout() {
-        const session = sessionStorage.getItem("session");
         try {
           if (session) {
             await fetch("/logout", {
               method: "POST",
-              headers: { "Authorization": `Bearer ${session}` }
+              credentials:"include",
             });
           }
         } catch (_) {
         } finally {
-          sessionStorage.removeItem("session");
+          sessionStorage.removeItem("role");
           sessionStorage.removeItem("user");
           location.reload();
         }
@@ -488,6 +566,7 @@
       async function fetchWithAuth(url, options = {}) {
         const res = await fetch(url, {
           ...options,
+          credentials: "include",
           headers: { ...(options.headers || {}), ...authHeaders() }
         });
 
@@ -530,6 +609,70 @@
         });
         return url.pathname + url.search;
       }
+
+      async function loadUserSettings() {
+        const user = document.getElementById("user-select").value;
+        if (!user) {
+          setSettingsStatus("ユーザーを選択してください", "error");
+          return;
+        }
+
+        setSettingsStatus("設定を取得中...");
+        const res = await fetchWithAuth(buildUrl("/admin/user-settings", {user}));
+        if (!res) return;
+
+        const data = await res.json();
+        if (data.error) {
+          setSettingsStatus(data.error, "error");
+          return;
+        }
+
+        document.getElementById("required-hours-input").value = data.required_hours ?? "";
+        document.getElementById("max-work-days-input").value = data.max_work_days ?? "";
+
+        setSettingsStatus("設定を読み込みました", "ok");
+      }
+
+      async function saveUserSettings() {
+        const user = document.getElementById("user-select").value;
+        if (!user) {
+          setSettingsStatus("ユーザーを選択してください", "error")
+        }
+
+        const requiredHours = document.getElementById("required-hours-input").value;
+        const maxWorkDays = document.getElementById("max-work-days-input").value;
+
+        setSettingsStatus("保存中...");
+        const res = await fetchWithAuth("/admin/user-settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user,
+            required_hours: requiredHours === "" ? null : Number(requiredHours),
+            max_work_days: maxWorkDays === "" ? null : Number(maxWorkDays),
+          }),
+        });
+
+        if (!res) return;
+
+        const data = await res.json();
+        if (!data.ok) {
+          setSettingsStatus(data.error || "保存に失敗しました", "error");
+          return;
+        }
+
+        setSettingsStatus("設定を保存しました", "ok")
+      }
+
+      function setSettingsStatus(text, type = "info") {
+        const el = document.getElementById("settings-status");
+        el.className = "status";
+        if (type !== "info") el.classList.add(type);
+        el.innerText = text;
+      }
+
+      document.getElementById("load-settings-btn").addEventListener("click", loadUserSettings);
+      document.getElementById("save-settings-btn").addEventListener("click", saveUserSettings);
 
       function renderSummary(rows) {
         const table = document.getElementById("summary-table");
@@ -610,7 +753,7 @@
         table.innerHTML = "";
 
         if (!data || !data.details || data.details.length === 0) {
-          table.innerHTML = "<tr><td colspan=\"6\">詳細がありません。</td></tr>";
+          table.innerHTML = "<tr><td colspan=\"5\">詳細がありません。</td></tr>";
           if (summaryEl) summaryEl.innerText = "";
           updateMap([]);
           return;
@@ -649,7 +792,6 @@
             <td>${day.start || "-"}</td>
             <td>${day.end || "-"}</td>
             <td>${day.net}</td>
-            <td>${day.break}</td>
             <td>
               <div class="action-cell">
                 <span class="action-text">${displayActions}</span>
@@ -720,9 +862,6 @@
         setStatus("CSVをダウンロードしました", "ok");
       }
 
-      document.getElementById("refresh-btn").addEventListener("click", loadSummary);
-      document.getElementById("detail-btn").addEventListener("click", loadUserDetail);
-
       async function downloadDetailCsv() {
         if (!isLoggedIn()) {
           setStatus("ログインしてください", "error");
@@ -751,8 +890,40 @@
         setStatus("詳細CSVをダウンロードしました", "ok");
       }
 
-      document.getElementById("detail-csv-btn").addEventListener("click", downloadDetailCsv)
-      document.getElementById("csv-btn").addEventListener("click", downloadCsv);
+      async function downloadExcel() {
+        if (!isLoggedIn()) {
+          setStatus("ログインしてください", "error");
+          return;
+        }
+
+        const month = document.getElementById("month-input").value;
+        const user = document.getElementById("user-select").value;
+
+        if (!month || !user) {
+          setStatus("対象月とユーザーを選択してください")
+          return;
+        }
+
+        setStatus("Excelを作成中...")
+
+        const res = await fetchWithAuth(
+          buildUrl("/admin/user-month.xlsx", {month, user})
+        );
+        if (!res) return;
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `attendance_${month}_${user}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+
+        URL.revokeObjectURL(url);
+        setStatus("Execelをダウンロードしました", "ok")
+      }
 
       function updateDetailPanelState() {
         const content = document.getElementById("detail-content");
@@ -765,9 +936,25 @@
         }
       }
 
+      function updateUserPanelState() {
+        const content = document.getElementById("user-panel-content");
+        const toggleBtn = document.getElementById("user-toggle-btn");
+        if (content) {
+          content.style.display = isUserPanelExpanded ? "block" : "none";
+        }
+        if (toggleBtn) {
+          toggleBtn.innerText = isUserPanelExpanded ? "折りたたむ" : "展開";
+        }
+      }
+
       document.getElementById("detail-toggle-btn").addEventListener("click", () => {
         isDetailExpanded = !isDetailExpanded;
         updateDetailPanelState();
+      });
+
+      document.getElementById("user-toggle-btn").addEventListener("click", () => {
+        isUserPanelExpanded = !isUserPanelExpanded;
+        updateUserPanelState();
       });
 
       document.getElementById("detail-reset-btn").addEventListener("click", () => {
@@ -824,8 +1011,12 @@
       
       document.getElementById("raw-csv-btn").addEventListener("click", downloadRawCsv);
       document.getElementById("logout-btn").addEventListener("click", logout);
-
-
+      document.getElementById("excel-btn").addEventListener("click", downloadExcel);
+      document.getElementById("detail-csv-btn").addEventListener("click", downloadDetailCsv)
+      document.getElementById("csv-btn").addEventListener("click", downloadCsv);
+      document.getElementById("refresh-btn").addEventListener("click", loadSummary);
+      document.getElementById("detail-btn").addEventListener("click", loadUserDetail);
+      document.getElementById("user-select").addEventListener("change", loadUserSettings);
 
       async function ensureAdminSession() {
         if (!isLoggedIn()) return false;
@@ -835,19 +1026,183 @@
 
         const data = await res.json();
         if (!data.ok) {
+          sessionStorage.removeItem("user");
+          sessionStorage.removeItem("role");
           await logout();
           return false;
         }
+
+        sessionStorage.setItem("user", data.user);
+        sessionStorage.setItem("role", "admin")
         return true
       }
+
+      function setUserStatus(text, type="info") {
+        const el = document.getElementById("users-status");
+        if (!el) return;
+        el.className = "status";
+        if (type !== "info") el.classList.add(type);
+        el.innerText = text;
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;")
+      }
+
+      async function loadUsers() {
+        setUserStatus("ユーザー一覧を取得中...");
+        const res = await fetchWithAuth("/admin/users");
+        if (!res) return;
+        const data = await res.json();
+        if (!data.ok) {
+          setUserStatus(data.error || "取得に失敗しました", "error");
+          return;
+        }
+        renderUsers(data.users || []);
+        setUserStatus("更新しました", "ok");
+      }
+
+      function renderUsers(users) {
+        const tbody = document.getElementById("users-table");
+        if (!tbody) return;
+        tbody.innerHTML = "";
+
+        if (!users || users.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5">ユーザーがいません</td></tr>`;
+          return;
+        }
+
+        users.forEach(u => {
+          const tr = document.createElement("tr");
+          const isActive = !!u.is_active;
+          const role = u.role || "user";
+
+          tr.innerHTML = `
+            <td>${u.id}</td>
+            <td>${escapeHtml(u.name)}</td>
+            <td>
+              <select data-action="role" data-name="${escapeHtml(u.name)}">
+                <option value="user" ${role === "user" ? "selected" : ""}>user</option>
+                <option value="admin" ${role === "admin" ? "selected" : ""}>admin</option>
+              </select>
+            </td>
+            <td>
+              <select data-action="active" data-name="${escapeHtml(u.name)}">
+                <option value="true" ${isActive ? "selected" : ""}>active</option>
+                <option value="false" ${!isActive ? "selected" : ""}>inactive</option>
+              </select>
+            </td>
+            <td style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="secondary" data-action="reset-pin" data-name="${escapeHtml(u.name)}">PIN再設定</button>
+            </td>
+          `;
+          tbody.appendChild(tr);          
+        });
+      }
+
+      async function createUser() {
+        const name = document.getElementById("new-user-name").value.trim();
+        const pin = document.getElementById("new-user-pin").value.trim();
+        const role = document.getElementById("new-user-role").value.trim();
+
+        if (!name || !pin) {
+          setUserStatus("ユーザー名とPINを入力してください", "error");
+          return;
+        }
+
+        setUserStatus("作成中...");
+        const res = await fetchWithAuth("/admin/users", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({name, pin, role}),
+        });
+        if (!res) return;
+
+        if (!res.ok) {
+          const msg = await res.text();
+          setUserStatus(`作成に失敗: ${msg}`, "error");
+          return;
+        }
+
+        setUserStatus("作成しました", "ok");
+        document.getElementById("new-user-pin").value = "";
+        await loadUsers()
+      }
+
+      async function updateUser(payload) {
+        const res = await fetchWithAuth("/admin/users", {
+          method: "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (!res) return null;
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || !data.ok) {
+          setUserStatus((data && (data.detail || data.error)) || "更新に失敗しました", "error")
+          return null;
+        }
+        return data.user;
+      }
+
+      document.getElementById("users-table").addEventListener("change", async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement)) return;
+
+        const action = target.dataset.action;
+        const name = target.dataset.name;
+        if (!action || !name) return;
+
+        if (action === "role") {
+          setUserStatus("権限を更新中...");
+          await updateUser({ name, role: target.value });
+          setUserStatus("更新しました", "ok");
+          return;
+        }
+
+        if (action === "active") {
+          setUserStatus("状態を更新中...");
+          const is_active = target.value === "true";
+          await updateUser({ name, is_active });
+          setUserStatus("更新しました", "ok");
+          return;
+        }
+      })
+
+      document.getElementById("users-table").addEventListener("click", async (event) => {
+        const btn = event.target.closest("button[data-action='reset-pin']");
+        if (!btn) return;
+
+        const name = btn.dataset.name;
+        if (!name) return;
+
+        const pin = prompt(`${name} の新しいPINを入力してください`);
+        if (!pin) return;
+
+        setUserStatus("PINを更新中...");
+        await updateUser({ name, pin });
+        setUserStatus("PINを更新しました", "ok");
+      });
+      
+      document.getElementById("create-user-btn").addEventListener("click", createUser);
+      document.getElementById("reload-users-btn").addEventListener("click", loadUsers);
 
       (async () => {
         initMonth();
         updateTodayLabel();
         applyLoginState();
+        updateUserPanelState();
         
         if (await ensureAdminSession()) {
+          applyLoginState();
           loadSummary();
+          loadUsers();
+        } else {
+          applyLoginState();
         }
       })();
     </script>

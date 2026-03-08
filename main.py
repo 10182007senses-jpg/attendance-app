@@ -2,22 +2,338 @@ import os, csv, io
 from urllib.parse import quote
 from datetime import datetime, date, time, timedelta
 import secrets
+from collections import defaultdict
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Cookie, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import Header
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine
-from security import verify_pin
-from sqlalchemy import or_
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from collections import defaultdict
+from pydantic import BaseModel
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine
+from security import verify_pin, hash_pin
 
 
 SESSION_RETENTION_DAYS = 30
+DEFAULT_USER = "瀬良 仁"
+SESSION_TTL_HOURS = 8       
+IDLE_TIMEOUT_MINUTES = 1000  
 
+
+ACTION_IN = "入室"
+ACTION_OUT = "退室"
+
+STATE_NOT_IN = "未入室"
+STATE_IN_ROOM = "在室中"
+STATE_UNKNOWN = "不明"
+STATE_VALUES = {STATE_NOT_IN, STATE_IN_ROOM, STATE_UNKNOWN}
+ROUND_MINUTES = 30
+
+STATIC_DIR = "static"
+INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
+ADMIN_FILE = os.path.join(STATIC_DIR, "admin.html")
+
+THIN = Side(style="thin", color="CCCCCC")
+BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+FILL_HEADER = PatternFill("solid", fgColor="F2F2F2")
+
+app = FastAPI()
+bearer_scheme = HTTPBearer(auto_error=False)
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+def get_session_id_from_cookie(
+    session: str | None = Cookie(default=None)
+) -> str | None:
+  return session
+
+def df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
+  buf = io.BytesIO()
+
+  with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+    ws = writer.sheets[sheet_name]
+    ws.freeze_panes = "A2"
+
+    for col in ws.columns:
+      max_len = 0
+      col_letter = col[0].column_letter
+      for cell in col:
+        v = "" if cell.value is None else str(cell.value)
+        if len(v) > max_len:
+          max_len = len(v)
+      
+      ws.column_dimensions[col_letter].width = min(max_len + 2, 40)
+
+  return buf.getvalue()
+
+def _set_col_width(ws, widths: dict[int, float]):
+  for col_idx, w in widths.items():
+    ws.column_dimensions[get_column_letter(col_idx)].width = w
+
+def _set_outer_border(ws, cell_range: str):
+  rows = list(ws[cell_range])
+  if not rows:
+    return
+  top = rows[0]
+  bottom = rows[-1]
+  for c in top:
+    c.border = Border(
+      left=c.border.left,
+      right=c.border.right,
+      top=Side(style="medium", color="666666"),
+      bottom=c.border.bottom,
+    )
+  for c in bottom:
+    c.border = Border(
+      left=c.border.left,
+      right=c.border.right,
+      top=c.border.top,
+      bottom=Side(style="medium", color="666666"),
+    )
+  for row in rows:
+    left = row[0]
+    right = row[-1]
+    left.border = Border(
+      left=Side(style="medium", color="666666"),
+      right=left.border.right,
+      top=left.border.top,
+      bottom=left.border.bottom,
+    )
+    right.border = Border(
+      left=right.border.left,
+      right=Side(style="medium", color="666666"),
+      top=right.border.top,
+      bottom=right.border.bottom,
+    )
+
+def _style_range(ws, cell_range: str, bold=False, fill=False, center=False):
+  for row in ws[cell_range]:
+    for c in row:
+      if bold:
+        c.font = Font(bold=True)
+      if fill:
+        c.fill = FILL_HEADER
+      if center:
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+      else:
+        c.alignment = Alignment(vertical="center", wrap_text=True)
+      c.border = BORDER
+
+def build_user_month_xlsx(
+    *,
+    month: str,
+    user: str,
+    scheduled_minutes: int,
+    max_workdays: int,
+    details: list[dict],
+    raw_logs: list[dict],
+) -> bytes:
+  wb = Workbook()
+
+  ws = wb.active
+  ws.title = "月次サマリー"
+  ws.freeze_panes = "A9"
+  ws.print_title_rows = f"{8}:{8}"
+  ws.page_setup.paperSize = ws.PAPERSIZE_A4
+  ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+  ws.page_setup.fitToWidth = 1
+  ws.page_setup.fitToHeight = 0
+  ws.page_margins.left = 0.3
+  ws.page_margins.right = 0.3
+  ws.page_margins.top = 0.5
+  ws.page_margins.bottom = 0.5
+
+  ws["A1"] = "勤怠確認票（月次）"
+  ws["A1"].font = Font(bold=True, size=14)
+  ws.merge_cells("A1:G1")
+  ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+  ws.row_dimensions[1].height = 26
+
+  # Header block
+  ws["A3"] = "対象月"
+  ws["D3"] = month
+  ws["F3"] = "氏名"
+  ws["G3"] = user
+  ws["A4"] = "所定労働時間"
+  ws["D4"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
+  ws["F4"] = "最大出勤日"
+  ws["G4"] = str(max_workdays)
+  ws.merge_cells("A3:C3")
+  ws.merge_cells("A4:C4")
+  ws.merge_cells("D3:E3")
+  ws.merge_cells("D4:E4")
+  _style_range(ws, "A3:G4", bold=False, fill=True, center=False)
+  _style_range(ws, "A3:A4", bold=True, fill=False, center=False)
+  _style_range(ws, "F3:F4", bold=True, fill=False, center=False)
+  _set_outer_border(ws, "A3:G4")
+  label_align = Alignment(horizontal="left", vertical="center", wrap_text=False)
+  ws["A3"].alignment = label_align
+  ws["A4"].alignment = label_align
+  ws.row_dimensions[3].height = 20
+  ws.row_dimensions[4].height = 20
+
+  header_row = 8
+  headers = ["日付", "入室(実打刻)", "退室(実打刻)", "入室(丸め後)", "退室(丸め後)", "実働時間", "備考"]
+  for i, h in enumerate(headers, start=1):
+    ws.cell(row=header_row, column=i, value=h)
+
+  _set_col_width(ws, {
+    1: 12, 2: 16, 3: 16, 4: 16, 5: 16, 6: 14, 7: 28
+  })
+
+  _style_range(ws, f"A{header_row}:G{header_row}", bold=True, fill=True, center=True)
+  _set_outer_border(ws, f"A{header_row}:G{header_row}")
+  ws.row_dimensions[header_row].height = 20
+  for c in ws[f"A{header_row}:G{header_row}"][0]:
+    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
+
+  total_net_min = 0
+  actual_days = 0
+  bad_days = 0
+
+  row = header_row + 1
+  for d in details:
+    actions = d.get("action") or []
+    in_times = [a["time"] for a in actions if a.get("action") == "入室"]
+    out_times = [a["time"] for a in actions if a.get("action") == "退室"]
+    raw_in = in_times[0] if in_times else ""
+    raw_out = out_times[-1] if out_times else ""
+
+    ok = bool(d.get("ok"))
+    err = d.get("error") or ""
+    if actions:
+      actual_days += 1
+    if not ok:
+      bad_days += 1
+
+    net_str = d.get("net") or ""
+    if ok and isinstance(net_str, str) and ("時間" in net_str and "分" in net_str):
+      try:
+        h = int(net_str.split("時間")[0])
+        m = int(net_str.split("時間")[1].split("分")[0])
+        total_net_min += h * 60 + m
+      except Exception:
+        pass
+    
+    ws.cell(row=row, column=1, value=d.get("date"))
+    ws.cell(row=row, column=2, value=raw_in)
+    ws.cell(row=row, column=3, value=raw_out)
+    ws.cell(row=row, column=4, value=(d.get("start") or ""))
+    ws.cell(row=row, column=5, value=(d.get("end") or ""))
+    ws.cell(row=row, column=6, value=(d.get("net") or ""))
+    ws.cell(row=row, column=7, value=(err if not ok else ""))
+    
+    _style_range(ws, f"A{row}:G{row}", center=False)
+    ws.row_dimensions[row].height = 18
+    note = str(err) if err else ""
+    note_len = len(note)
+    ws[f"G{row}"].alignment = Alignment(vertical="top", wrap_text=True, shrink_to_fit=(note_len > 80))
+    if note_len >= 20:
+      ws.row_dimensions[row].height = 32
+    if not ok and err:
+      for c in ws[f"A{row}:G{row}"][0]:
+        c.fill = PatternFill("solid", fgColor="FCE4D6")
+        if c.column == 7:
+          c.font = Font(color="9C0006")
+    row += 1
+
+  data_start_row = header_row + 1
+  data_end_row = row - 1
+  
+  sum_row = row + 1
+  ws.merge_cells(f"A{sum_row}:G{sum_row}")
+  ws[f"A{sum_row}"] = "月次集計"
+  _style_range(ws, f"A{sum_row}:G{sum_row}", bold=True, fill=True, center=True)
+
+  ws[f"A{sum_row+1}"] = "実出勤日"
+  ws[f"D{sum_row+1}"] = actual_days
+  ws[f"A{sum_row+2}"] = "不整合日数"
+  ws[f"D{sum_row+2}"] = bad_days
+  ws[f"A{sum_row+3}"] = "実働合計(丸め後)"
+  ws[f"D{sum_row+3}"] = f"{total_net_min//60}時間{total_net_min%60}分"
+  ws[f"A{sum_row+4}"] = "所定労働時間(月)"
+  ws[f"D{sum_row+4}"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
+  ws[f"A{sum_row+5}"] = "最大出勤日(上限)"
+  ws[f"D{sum_row+5}"] = max_workdays
+  for r in range(sum_row + 1, sum_row + 6):
+    ws.merge_cells(f"A{r}:C{r}")
+  _style_range(ws, f"A{sum_row+1}:D{sum_row+5}", bold=False, fill=False, center=False)
+  for r in range(sum_row + 1, sum_row + 6):
+    ws[f"A{r}"].alignment = label_align
+    ws[f"D{r}"].alignment = Alignment(horizontal="right", vertical="center")
+  _set_outer_border(ws, f"A{sum_row}:D{sum_row+5}")
+
+  sign_row = sum_row + 7
+  ws.merge_cells(f"A{sign_row}:C{sign_row}")
+  ws.merge_cells(f"D{sign_row}:E{sign_row}")
+  ws.merge_cells(f"A{sign_row+2}:C{sign_row+2}")
+  ws.merge_cells(f"D{sign_row+2}:E{sign_row+2}")
+  ws[f"A{sign_row}"] = "本人署名："
+  ws[f"D{sign_row}"] = " "
+  ws[f"F{sign_row}"] = "日付："
+  ws[f"G{sign_row}"] = "____/____/____"
+
+  ws[f"A{sign_row+2}"] = "管理者確認："
+  ws[f"D{sign_row+2}"] = " "
+  ws[f"F{sign_row+2}"] = "日付："
+  ws[f"G{sign_row+2}"] = "____/____/____"
+  _style_range(ws, f"A{sign_row}:G{sign_row+2}", bold=False, fill=False, center=False)
+  ws[f"A{sign_row}"].alignment = label_align
+  ws[f"A{sign_row+2}"].alignment = label_align
+  _set_outer_border(ws, f"A{sign_row}:G{sign_row+2}")
+
+  note_col = None
+  for c in range(1, 30):
+    if ws.cell(row=header_row, column=c).value == "備考":
+      note_col = c
+      break
+  if note_col is not None and data_end_row >= data_start_row:
+    note_letter = get_column_letter(note_col)
+    base_width = ws.column_dimensions[note_letter].width
+    ws.column_dimensions[note_letter].width = (base_width + 8) if base_width else 36
+    for c in ws[header_row]:
+      a = c.alignment or Alignment()
+      c.alignment = a.copy(wrap_text=False)
+    for r in range(data_start_row, data_end_row + 1):
+      note_cell = ws.cell(r, note_col)
+      a = note_cell.alignment or Alignment()
+      note_cell.alignment = a.copy(wrap_text=True, vertical="top")
+      note_len = len(str(note_cell.value or ""))
+      if note_len >= 20:
+        ws.row_dimensions[r].height = 32
+
+  ws2 = wb.create_sheet("生ログ")
+  ws2.freeze_panes = "A2"
+  raw_headers = ["ts", "user", "action", "lat", "lon", "source"]
+  for i, h in enumerate(raw_headers, start=1):
+    ws2.cell(row=1, column=i, value=h)
+  _set_col_width(ws2, {1: 20, 2: 14, 3: 10, 4: 12, 5: 12, 6: 12})
+  _style_range(ws2, "A1:F1", bold=True, fill=True, center=True)
+
+  rr = 2
+  for x in raw_logs:
+    ws2.cell(rr, 1, x.get("ts", ""))
+    ws2.cell(rr, 2, x.get("user", ""))
+    ws2.cell(rr, 3, x.get("action", ""))
+    ws2.cell(rr, 4, x.get("lat", ""))
+    ws2.cell(rr, 5, x.get("lon", ""))
+    ws2.cell(rr, 6, x.get("source", ""))
+    _style_range(ws2, f"A{rr}:F{rr}", center=False)
+    rr += 1
+
+  buf = io.BytesIO()
+  wb.save(buf)
+  return buf.getvalue()
+  
 def cleanup_sessions(db: Session) -> int:
   now = datetime.now()
   cutoff = now - timedelta(days=SESSION_RETENTION_DAYS)
@@ -36,32 +352,12 @@ def cleanup_sessions(db: Session) -> int:
   deleted = q.delete(synchronize_session=False)
   db.commit()
   return deleted
-app = FastAPI()
 
 @app.on_event("startup")
 def startup():
-    if os.getenv("RENDER"):   # Render 環境では何もしない
-        return
     init_db()
     with SessionLocal() as db:
         cleanup_sessions(db)
-
-
-DEFAULT_USER = "瀬良 仁"
-SESSION_TTL_HOURS = 8          # 絶対期限
-IDLE_TIMEOUT_MINUTES = 10   # 無操作タイムアウト（共有端末向け）
-
-
-bearer_scheme = HTTPBearer(auto_error=False)
-
-
-
-STATIC_DIR = "static"
-INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
-ADMIN_FILE = os.path.join(STATIC_DIR, "admin.html")
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 
 
 @app.get("/admin")
@@ -77,54 +373,12 @@ def get_db():
   finally:
     db.close()
 
-ACTIONS = {"出勤", "退勤", "休憩開始", "休憩終了"}
+ACTIONS = {ACTION_IN, ACTION_OUT}
 
 
 def _get_user_id(db: Session, user_name: str) -> int | None:
   u = db.query(User).filter(User.name == user_name, User.is_active == True).one_or_none()
   return u.id if u else None
-
-def get_acurrent_user_row(creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme), db: Session = Depends(get_db)) -> User | None:
-  if not creds:
-    print("[auth] no credentials")
-    return None
-  
-  session_id = creds.credentials
-
-  now = datetime.now()
-  s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
-  if not s:
-    print("[auth] session not found:", session_id)
-    return None
-  if s.revoked:
-    print("[auth] session revoked:", session_id)
-    return None
-  if s.expires_at <= now:
-    print("[auth] session expired:", session_id, "expires_at=", s.expires_at, "now=", now)
-    s.revoked = True
-    db.commit()
-    return None
-  
-  if s.last_seen_at and (now - s.last_seen_at) > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
-    print("[auth] idle timeout:", session_id, "last_seen_at=", s.last_seen_at, "now=", now)
-    s.revoked = True
-    db.commit()
-    return None
-  
-  s.last_seen_at = now
-  db.commit()
-
-  u = db.query(User).filter(User.id == s.user_id, User.is_active == True).one_or_none()
-  if not u:
-    print("[auth] user not found or inactive:", s.user_id)
-  return u
-
-def require_admin(user: User | None = Depends(get_acurrent_user_row)) -> User:
-  if user is None:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
-  if user.role != "admin":
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="権限がありません")
-  return user
 
 def month_range(month: str) -> tuple[datetime, datetime]:
   y, m = month.split("-")
@@ -167,9 +421,9 @@ def add_log_db(db: Session, action: str, user_name: str, lat: float | None = Non
 
   wd = _ensure_workday(db, user_id, now_dt.date())
 
-  if action == "出勤":
+  if action == ACTION_IN:
     wd.status = "open"
-  elif action == "退勤":
+  elif action == ACTION_OUT:
     wd.status = "closed"
   wd.updated_at = datetime.now()
 
@@ -189,10 +443,12 @@ def get_last_action_db(db: Session, user_name:str) -> str | None:
     return None
   
   last = (
-    db.query(AttendanceLog).filter(AttendanceLog.user_id == user_id)
+    db.query(AttendanceLog)
+    .filter(AttendanceLog.user_id == user_id, AttendanceLog.action.in_(ACTIONS))
     .order_by(AttendanceLog.ts.desc())
     .first()
   )
+  # Returns None when the user has no logs or doesn't exist.
   return last.action if last else None
 
 def get_today_logs_db(db: Session, user_name: str):
@@ -202,7 +458,12 @@ def get_today_logs_db(db: Session, user_name: str):
   
   start, end = _today_range()
   logs = (db.query(AttendanceLog)
-          .filter(AttendanceLog.user_id == user_id, AttendanceLog.ts >= start, AttendanceLog.ts<end)
+          .filter(
+            AttendanceLog.user_id == user_id,
+            AttendanceLog.ts >= start,
+            AttendanceLog.ts < end,
+            AttendanceLog.action.in_(ACTIONS),
+          )
           .order_by(AttendanceLog.ts.asc())
           .all()
           )
@@ -221,28 +482,26 @@ def get_today_logs_db(db: Session, user_name: str):
 def get_current_state_db(db: Session, user_name: str):
   user_id = _get_user_id(db, user_name)
   if user_id is None:
-    return {"state": "未出勤", "last_action": None, "lat": None, "lon": None, "time": None}
+    return {"state": STATE_NOT_IN, "last_action": None, "lat": None, "lon": None, "time": None}
   
   last = (
     db.query(AttendanceLog)
-    .filter(AttendanceLog.user_id == user_id)
+    .filter(AttendanceLog.user_id == user_id, AttendanceLog.action.in_(ACTIONS))
     .order_by(AttendanceLog.ts.desc())
     .first()
   )
 
   if not last:
-    return {"state": "未出勤", "last_action": None, "lat": None, "lon": None, "time": None}
+    return {"state": STATE_NOT_IN, "last_action": None, "lat": None, "lon": None, "time": None}
   
   last_action = last.action
 
-  if last_action is None or last_action == "退勤":
-    state = "未出勤"
-  elif last_action in ("出勤", "休憩終了"):
-    state = "出勤中"
-  elif last_action == "休憩開始":
-    state = "休憩中"
+  if last_action is None or last_action == ACTION_OUT:
+    state = STATE_NOT_IN
+  elif last_action == ACTION_IN:
+    state = STATE_IN_ROOM
   else:
-    state = "不明"
+    state = STATE_UNKNOWN
 
   last_time = last.ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(last.ts, "strftime") else (str(last.ts) if last.ts is not None else None)
   return {
@@ -261,7 +520,7 @@ def group_logs_by_workday_start(logs: list["AttendanceLog"]) -> dict[date, list[
   in_shift = False
 
   for l in logs:
-    if l.action == "出勤":
+    if l.action == ACTION_IN:
       if in_shift and start_day is not None:
         by_day[start_day].extend(current)
       current = [l]
@@ -272,7 +531,7 @@ def group_logs_by_workday_start(logs: list["AttendanceLog"]) -> dict[date, list[
     if in_shift:
       current.append(l)
 
-    if l.action == "退勤":
+    if l.action == ACTION_OUT:
       if start_day is not None:
         by_day[start_day].extend(current)
       current = []
@@ -285,90 +544,85 @@ def group_logs_by_workday_start(logs: list["AttendanceLog"]) -> dict[date, list[
   return dict(by_day)
 
 def calc_work_time_db(db: Session, user_name: str):
-  logs = get_today_logs_db(db, user_name)
-  if not logs:
-    return {"error": "記録がありません"}
-  
-  parsed = []
-  for l in logs:
-    ts_val = l["時刻"]
-    ts = ts_val if isinstance(ts_val, datetime) else datetime.strptime(ts_val, "%Y-%m-%d %H:%M:%S")
-    parsed.append((l["アクション"], ts))
-
-  break_start = [ts for a, ts in parsed if a == "休憩開始"]
-  break_end = [ts for a, ts in parsed if a == "休憩終了"]
-
-  if len(break_start) != len(break_end):
-    return {"error": "休憩開始・終了が一致していません"}
-  
-  total_break = timedelta(0)
-  for s, e in zip(break_start, break_end):
-    if e < s:
-      return {"error": "休憩の時刻が不正です"}
-    total_break += (e - s)
-
-  clock_ins = [ts for a, ts in parsed if a == "出勤"]
-  clock_outs = [ts for a, ts in parsed if a == "退勤"]
-  if not clock_ins or not clock_outs:
-    return {"error": "出勤または退勤の記録がありません"}
-  
-  start = min(clock_ins)
-  end = max(clock_outs)
-  if end < start:
-    return {"error": "出退勤の時刻が不正です"}
-  
-  gross = end - start
-  net = gross - total_break
-  total_minutes = int(net.total_seconds() // 60)
-  hours = total_minutes // 60
-  minutes = total_minutes % 60
-
-  today = datetime.now().date()
-  return {
-    "date": str(today),
-    "gross_work_time": str(gross),
-    "break_time": str(total_break),
-    "net_work_time": f"{hours}時間{minutes}分"
-  }
+    user_id = _get_user_id(db, user_name)
+    if user_id is None:
+      return {"error": "ユーザーが見つかりません"}
     
+    start_dt, end_dt = _today_range()
+    daylogs = (
+      db.query(AttendanceLog)
+      .filter(
+        AttendanceLog.user_id == user_id,
+        AttendanceLog.ts >= start_dt,
+        AttendanceLog.ts < end_dt,
+        AttendanceLog.action.in_(ACTIONS),
+      )
+      .order_by(AttendanceLog.ts.asc())
+      .all()
+    )
+  
+    r = calc_day_from_logs(daylogs)
+    if not r["ok"]:
+      return {"error": r["error"] or "計算できません"}
+    
+    return {
+      "date": str(start_dt.date()),
+      "gross_work_time": sec_to_hm(r["gross_sec"]),
+      "net_work_time": sec_to_hm(r["net_sec"]),
+      # 必要なら丸め前後を表示
+      "start": r["start"].strftime("%H:%M"),
+      "end": r["end"].strftime("%H:%M"), 
+    }
+      
 def calc_day_from_logs(day_logs: list[AttendanceLog]) -> dict:
-  if not day_logs:
-    return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "ログなし", "start": None, "end": None}
+    if not day_logs:
+      return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "ログなし", "start": None, "end": None}
+    
+    day_logs = sorted(day_logs, key=lambda x : x.ts)
   
-  day_logs = sorted(day_logs, key=lambda x : x.ts)
-
-  ins = [l.ts for l in day_logs if l.action == "出勤"]
-  outs = [l.ts for l in day_logs if l.action == "退勤"]
-  if not ins or not outs:
-    return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "出勤または退勤が不足", "start": (min(ins) if ins else None), "end": (max(outs) if outs else None)}
+    ins = [l.ts for l in day_logs if l.action == ACTION_IN]
+    outs = [l.ts for l in day_logs if l.action == ACTION_OUT]
+    if not ins or not outs:
+      return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "入室または退室が不足", "start": (min(ins) if ins else None), "end": (max(outs) if outs else None)}
+    
+    raw_start = min(ins)
+    raw_end = max(outs)
   
-  start = min(ins)
-  end = max(outs)
-  if end < start:
-    return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "出退勤時刻が不正", "start": start, "end": end}
+    start = ceil_time(raw_start, ROUND_MINUTES)
+    end = floor_time(raw_end, ROUND_MINUTES)
   
-  bs = [l.ts for l in day_logs if l.action == "休憩開始"]
-  be = [l.ts for l in day_logs if l.action == "休憩終了"]
-  if len(bs) != len(be):
-    return {"ok": False, "gross_sec": int((end - start).total_seconds()), "break_sec": 0, "net_sec": 0, "error": "休憩開始・終了が不一致", "start": start, "end": end}
-  
-  break_sec = 0
-  for s, e in zip(bs, be):
-    if e < s:
-      return {"ok": False, "gross_sec": int((end - start).total_seconds()), "break_sec": 0, "net_sec": 0, "error": "休憩時刻が不正", "start": start, "end": end}
-    break_sec += int((e - s).total_seconds())
-
-  gross_sec = int((end-start).total_seconds())
-  net_sec = gross_sec - break_sec
-  if net_sec<0:
-    return {"ok": False, "gross_sec": gross_sec, "break_sec": break_sec, "net_sec": 0, "error": "休憩が勤務を超過", "start": start, "end": end}
-  return {"ok": True, "gross_sec": gross_sec, "break_sec": break_sec, "net_sec": net_sec, "error": None, "start": start, "end": end}
+    if end < start:
+      return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "入退室時刻が不正", "start": start, "end": end}
+    
+    gross_sec = int((end-start).total_seconds())
+    if gross_sec < 0:
+      gross_sec = 0
+    net_sec = gross_sec
+    return {"ok": True, "gross_sec": gross_sec, "break_sec": 0, "net_sec": net_sec, "error": None, "start": start, "end": end}
 
 def sec_to_hm(sec: int) ->str:
   minutes = sec // 60
   h = minutes // 60
   m = minutes % 60
   return f"{h}時間{m}分"
+
+def ceil_time(dt: datetime, minutes: int = ROUND_MINUTES) -> datetime:
+  dt0 = dt.replace(second=0, microsecond=0)
+  m = dt0.minute
+
+  if (m % minutes) == 0:
+    return dt0
+  
+  add = minutes - (m % minutes)
+  return dt0 + timedelta(minutes=add)
+
+def floor_time(dt: datetime, minutes: int = ROUND_MINUTES) -> datetime:
+  dt0 = dt.replace(second=0, microsecond=0)
+  m = dt0.minute
+  if (m % minutes) == 0:
+    return dt0 - timedelta(minutes=minutes)
+  sub = (m % minutes)
+  return dt0 - timedelta(minutes=sub)
 
 def _get_bearer_token(authorization: str | None) -> str | None:
   if not authorization:
@@ -377,12 +631,96 @@ def _get_bearer_token(authorization: str | None) -> str | None:
     return None
   return authorization.removeprefix("Bearer ").strip() or None
 
+def get_acurrent_user_row(creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme), db: Session = Depends(get_db)) -> User | None:
+  if not creds:
+    print("[auth] no credentials")
+    return None
+  
+  session_id = creds.credentials
+
+  now = datetime.now()
+  s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+  if not s:
+    print("[auth] session not found:", session_id)
+    return None
+  if s.revoked:
+    print("[auth] session revoked:", session_id)
+    return None
+  if s.expires_at <= now:
+    print("[auth] session expired:", session_id, "expires_at=", s.expires_at, "now=", now)
+    s.revoked = True
+    db.commit()
+    return None
+  
+  if s.last_seen_at and (now - s.last_seen_at) > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
+    print("[auth] idle timeout:", session_id, "last_seen_at=", s.last_seen_at, "now=", now)
+    s.revoked = True
+    db.commit()
+    return None
+  
+  s.last_seen_at = now
+  db.commit()
+
+  u = db.query(User).filter(User.id == s.user_id, User.is_active == True).one_or_none()
+  if not u:
+    print("[auth] user not found or inactive:", s.user_id)
+  return u
+
+def get_current_user_row_from_cookie(
+    session_id: str | None = Depends(get_session_id_from_cookie),
+    db: Session = Depends(get_db),
+) -> User | None:
+  if not session_id:
+    return None
+  
+  now = datetime.now()
+  s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+  if not s or s.revoked or s.expires_at <= now:
+    if s and s.expires_at <= now:
+      s.revoked = True
+      db.commit()
+    return None
+    
+  if s.last_seen_at and now - s.last_seen_at > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
+    s.revoked = True
+    db.commit()
+    return None
+
+  s.last_seen_at = now
+  db.commit()
+
+  u = db.query(User).filter(User.id == s.user_id, User.is_active == True).one_or_none()
+  return u
+
+
+def require_admin(user: User | None = Depends(get_current_user_row_from_cookie)) -> User:
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+  if user.role != "admin":
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="権限がありません")
+  return user
+
 class LoginRequest(BaseModel):
   user: str
   pin:str
 
-def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)):
-  session_id = _get_bearer_token(authorization)
+class UserSettingsRequest(BaseModel):
+  user: str
+  required_hours: float | None = None
+  max_work_days: int | None = None
+
+class AdminCreateUserRequest(BaseModel):
+  name: str
+  pin: str
+  role: str = "user"
+
+class AdminUpdateUserRequest(BaseModel):
+  name: str
+  role: str | None = None
+  is_active: bool | None = None
+  pin: str | None = None
+
+def get_current_user(session_id: str | None = Depends(get_session_id_from_cookie) , db: Session = Depends(get_db)):
   if not session_id:
     return None
   
@@ -413,8 +751,84 @@ def get_current_user(authorization: str = Header(None), db: Session = Depends(ge
   return u.name if u else None
 
 
+def get_month_logs_for_user(db: Session, user_id: int, month: str) -> list[AttendanceLog]:
+  start, end = month_range(month)
+  return (
+    db.query(AttendanceLog)
+    .filter(AttendanceLog.user_id == user_id, AttendanceLog.ts >= start, AttendanceLog.ts < end, AttendanceLog.action.in_(ACTIONS))
+    .order_by(AttendanceLog.ts.asc())
+    .all()
+  )
+
+def calc_month_summary_from_logs(
+    logs: list[AttendanceLog],
+    month: str,
+    info: dict
+):
+  MONTH_REQUIRED_HOURS = info["required_hours"]
+  MONTH_MAX_WORK_DAYS = info["max_work_days"]
+
+  day_map = group_logs_by_workday_start(logs)
+
+  worked_days = 0
+  ok_days = 0
+  inconsistent_days = 0
+  total_net_sec = 0
+
+  for d, day_logs in day_map.items():
+    if not str(d).startswith(month):
+      continue
+
+    worked_days += 1
+    r = calc_day_from_logs(day_logs)
+
+    if r["ok"]:
+      ok_days += 1
+      total_net_sec += r["net_sec"]
+    else:
+      inconsistent_days += 1
+
+  required_sec = int(MONTH_REQUIRED_HOURS * 3600)
+  remaining_sec = max(required_sec - total_net_sec, 0)
+  remaining_days = max(MONTH_MAX_WORK_DAYS - worked_days, 0)
+
+  return {
+    "month": month,
+    "required_hours": MONTH_REQUIRED_HOURS,
+    "max_work_days": MONTH_MAX_WORK_DAYS,
+    "worked_days": worked_days,
+    "ok_days": ok_days,
+    "inconsistent_days": inconsistent_days,
+    "worked_time": sec_to_hm(total_net_sec),
+    "remaining_time": sec_to_hm(remaining_sec),
+    "remaining_minutes": remaining_sec // 60,
+    "remaining_days": remaining_days
+  }
+
+def get_user_info(db: Session, user_id: int):
+  MONTH_REQUIRED_HOURS = 160
+  MONTH_MAX_WORK_DAYS = 20
+  u = db.query(User).filter(
+    User.id == user_id,
+    User.is_active == True 
+    ).one_or_none()
+  
+  if not u:
+    return {
+      "required_hours": MONTH_REQUIRED_HOURS,
+      "max_work_days": MONTH_MAX_WORK_DAYS
+    }
+  if u.required_hours is not None:
+    MONTH_REQUIRED_HOURS = u.required_hours
+  if u.max_work_days is not None:
+    MONTH_MAX_WORK_DAYS = u.max_work_days
+  return {
+    "required_hours": MONTH_REQUIRED_HOURS,
+    "max_work_days": MONTH_MAX_WORK_DAYS
+  }
+
 @app.post("/login")
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
   user_name = req.user.strip()
   pin = req.pin.strip()
 
@@ -426,6 +840,16 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     return {"ok": False, "error": "認証に失敗しました"}
   
   session_id = secrets.token_hex(16)
+  response.set_cookie(
+    key="session",
+    value=session_id,
+    httponly=True,
+    secure=bool(os.getenv("RENDER")),
+    samesite="lax",
+    max_age=SESSION_TTL_HOURS * 3600,
+    path="/",
+  )
+
   now = datetime.now()
 
   s = DbSession(
@@ -440,17 +864,15 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
   db.add(s)
   db.commit()
 
-  return {"ok": True, "session": session_id, "user": u.name, "role": u.role}
+  return {"ok": True, "user": u.name, "role": u.role}
 
 @app.get("/admin/ping")
 def admin_ping(admin: User = Depends(require_admin)):
   return {"ok": True, "user": admin.name}
 
 
-
 @app.post("/logout")
-def logout(authorization: str | None = Header(None), db: Session = Depends(get_db),):
-  session_id = _get_bearer_token(authorization)
+def logout(response: Response, session_id: str | None = Depends(get_session_id_from_cookie), db: Session = Depends(get_db),):
   if not session_id:
     return {"ok": True}
   
@@ -458,6 +880,8 @@ def logout(authorization: str | None = Header(None), db: Session = Depends(get_d
   if s:
     s.revoked = True
     db.commit()
+
+  response.delete_cookie("session", path="/")
   return {"ok": True}
 
 @app.get("/")
@@ -473,14 +897,14 @@ def clock_in(user: str = Depends(get_current_user), lat: float = None, lon: floa
   
   try:
     last = get_last_action_db(db, user)
-    if last != "退勤" and last is not None:
-      return {"error": "すでに出勤しています"}
+    if last != ACTION_OUT and last is not None:
+      return {"error": "すでに入室しています"}
       
-    row = add_log_db(db, "出勤", user, lat, lon)
+    row = add_log_db(db, ACTION_IN, user, lat, lon)
     return {"status": "ok", "data": row}
   
   except Exception:
-    return {"error":"出勤の記録に失敗しました。"}
+    return {"error":"入室の記録に失敗しました。"}
 
   
 @app.get("/clock-out")
@@ -489,43 +913,21 @@ def clock_out(user: str = Depends(get_current_user), lat: float = None, lon: flo
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
   try:
     last = get_last_action_db(db, user)
-    if last != "出勤" and last != "休憩終了":
-      return {"error": "出勤していないため退勤できません"}
+    if last != ACTION_IN:
+      return {"error": "入室していないため退室できません"}
     
-    row = add_log_db(db, "退勤", user, lat, lon)
+    row = add_log_db(db, ACTION_OUT, user, lat, lon)
     return {"status": "ok", "data": row}
   except Exception:
-    return {"error": "退勤の記録に失敗しました"}
+    return {"error": "退室の記録に失敗しました"}
 
 @app.get("/break-start")
 def break_start(user: str = Depends(get_current_user), lat: float = None, lon: float = None, db: Session = Depends(get_db),):
-  if user is None:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
-
-  try:
-    last = get_last_action_db(db, user)
-    if last != "出勤" and last != "休憩終了":
-      return {"error": "勤務中でなければ休憩に入れません"}
-    
-    row = add_log_db(db, "休憩開始", user, lat, lon)
-    return {"status": "ok", "data": row}
-  except Exception:
-    return {"error": "休憩開始の記録に失敗しました"}
+  raise HTTPException(status_code=410, detail="この機能は現在利用できません")
 
 @app.get("/break-end")
 def break_end(user: str = Depends(get_current_user), lat: float = None, lon: float = None, db: Session = Depends(get_db),):
-  if user is None:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
-
-  try:
-    last = get_last_action_db(db, user)
-    if last != "休憩開始":
-      return {"error": "休憩中でなければ休憩終了できません"}
-    
-    row = add_log_db(db, "休憩終了", user, lat, lon)
-    return {"status": "ok", "data": row}
-  except Exception:
-    return {"error": "休憩終了の記録に失敗しました"}
+  raise HTTPException(status_code=410, detail="この機能は現在利用できません")
 
 @app.get("/today-logs")
 def today_logs(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -539,13 +941,12 @@ def today_logs(user: str = Depends(get_current_user), db: Session = Depends(get_
 
 @app.get("/current-state")
 def current_state(user: str = Depends(get_current_user), db: Session = Depends(get_db),):
-  if user is None:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
-
   try:
+    if user is None:
+      return {"state": STATE_NOT_IN, "last_action": None, "lat": None, "lon": None, "time": None}
     return get_current_state_db(db, user)
   except Exception:
-    return {"error": "状態の取得に失敗しました", "state": "不明"}
+    return {"error": "状態の取得に失敗しました", "state": STATE_UNKNOWN}
 
 @app.get("/work-time")
 def work_time(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -565,7 +966,11 @@ def admin_month_summary(month, admin: User = Depends(require_admin), db: Session
 
   logs = (
     db.query(AttendanceLog)
-    .filter(AttendanceLog.ts >= start, AttendanceLog.ts < (end + timedelta(days=1)))
+    .filter(
+      AttendanceLog.ts >= start,
+      AttendanceLog.ts < (end + timedelta(days=1)),
+      AttendanceLog.action.in_(ACTIONS),
+    )
     .order_by(AttendanceLog.user_id.asc(), AttendanceLog.ts.asc())
     .all()
   )
@@ -595,7 +1000,6 @@ def admin_month_summary(month, admin: User = Depends(require_admin), db: Session
     open_days = 0
 
     total_gross = 0
-    total_break = 0
     total_net = 0
 
     for d, day_logs in day_map.items():
@@ -612,7 +1016,6 @@ def admin_month_summary(month, admin: User = Depends(require_admin), db: Session
       if r["ok"]:
         ok_days += 1
         total_gross += r["gross_sec"]
-        total_break += r["break_sec"]
         total_net += r["net_sec"]
       else:
         inconsistent_day += 1
@@ -624,7 +1027,6 @@ def admin_month_summary(month, admin: User = Depends(require_admin), db: Session
       "inconsistent_days": inconsistent_day,
       "open_days": open_days,
       "total_net": sec_to_hm(total_net),
-      "total_break": sec_to_hm(total_break),
       "total_gross": sec_to_hm(total_gross),
     })
 
@@ -648,7 +1050,12 @@ def admin_user_detail(
   
   logs = (
     db.query(AttendanceLog)
-    .filter(AttendanceLog.user_id == u.id, AttendanceLog.ts >= start, AttendanceLog.ts < end)
+    .filter(
+      AttendanceLog.user_id == u.id,
+      AttendanceLog.ts >= start,
+      AttendanceLog.ts < end,
+      AttendanceLog.action.in_(ACTIONS),
+    )
     .order_by(AttendanceLog.ts.asc())
     .all()
   )
@@ -665,7 +1072,6 @@ def admin_user_detail(
       "start": r["start"].strftime("%H:%M:%S") if r["start"] else None,
       "end": r["end"].strftime("%H:%M:%S") if r["end"] else None,
       "gross": sec_to_hm(r["gross_sec"]),
-      "break": sec_to_hm(r["break_sec"]),
       "net": sec_to_hm(r["net_sec"]),
       "action": [
         {"action":l.action, "time": l.ts.strftime("%H:%M:%S"), "lat": l.lat, "lon": l.lon,}
@@ -703,7 +1109,6 @@ def admin_user_detail_csv(
     "start",
     "end",
     "gross",
-    "break",
     "net",
     "actions",
     "last_lat",
@@ -724,7 +1129,6 @@ def admin_user_detail_csv(
       d.get("start") or "",
       d.get("end") or "",
       d.get("gross") or "",
-      d.get("break") or "",
       d.get("net") or "",
       actions,
     ])
@@ -759,7 +1163,6 @@ def admin_month_summary_csv(
     "inconsistent_days",
     "open_days",
     "total_net",
-    "total_break",
     "total_gross",
   ])
 
@@ -772,7 +1175,6 @@ def admin_month_summary_csv(
       row["inconsistent_days"],
       row["open_days"],
       row["total_net"],
-      row["total_break"],
       row["total_gross"],      
     ])
 
@@ -785,7 +1187,8 @@ def admin_month_summary_csv(
     io.BytesIO(content),
     media_type="text/csv; charset=utf-8",
     headers={"Content-Disposition": f'attachment; filename="{filename_ascii}"; filename*=UTF-8\'\'{filename_star}'},
-  )
+  ) 
+
 
 @app.get("/admin/raw-logs.csv")
 def admin_raw_logs_csv(
@@ -799,7 +1202,11 @@ def admin_raw_logs_csv(
   q = (
     db.query(AttendanceLog, User)
     .join(User, User.id == AttendanceLog.user_id)
-    .filter(AttendanceLog.ts >= start, AttendanceLog.ts < end)
+    .filter(
+      AttendanceLog.ts >= start,
+      AttendanceLog.ts < end,
+      AttendanceLog.action.in_(ACTIONS),
+    )
     .order_by(User.id.asc(), AttendanceLog.ts.asc())
   )
 
@@ -845,3 +1252,218 @@ def admin_raw_logs_csv(
     media_type="text/csv; charset=utf-8",
     headers={"Content-Disposition": f'attachment; filename="{filename_ascii}"; filename*=UTF-8\'\'{filename_star}'},
   )
+
+@app.get("/admin/user-settings")
+def get_user_settings(
+  user: str,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db)
+):
+  u = db.query(User).filter(
+    User.name == user,
+    User.is_active == True
+  ).one_or_none()
+
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+  
+  return {
+    "user": u.name,
+    "required_hours": u.required_hours,
+    "max_work_days": u.max_work_days
+  }
+
+@app.post("/admin/user-settings")
+def update_user_settings(
+  req: UserSettingsRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db)
+):
+  u = db.query(User).filter(
+    User.name == req.user,
+    User.is_active == True
+  ).one_or_none()
+
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+  
+  if req.required_hours is not None:
+    if req.required_hours < 0:
+      raise HTTPException(status_code=400, detail="required_hoursは0以上")
+    u.required_hours = req.required_hours
+
+  if req.max_work_days is not None:
+    if req.max_work_days < 0:
+      raise HTTPException(status_code=400, detail="max_work_daysは0以上")
+    u.max_work_days = req.max_work_days
+
+  db.commit()
+
+  return {
+    "ok": True,
+    "user": u.name,
+    "required_hours": u.required_hours,
+    "max_work_days": u.max_work_days
+  }
+
+@app.get("/admin/user-month.xlsx")
+def admin_user_month_xlsx(
+  month: str,
+  user: str,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db)
+):
+  user_id = _get_user_id(db, user)
+  info = get_user_info(db, user_id)
+  MONTH_REQUIRED_MINUTES = info["required_hours"] * 60
+  MONTH_MAX_WORK_DAYS = info["max_work_days"]
+
+  detail = admin_user_detail(month, user, admin=admin, db=db)
+  if detail.get("error"):
+    return detail
+  
+  start, end = month_range(month)
+  u = db.query(User).filter(User.name == user, User.is_active == True).one_or_none()
+  if not u:
+    raise HTTPException(status_code=404, detail="対象のユーザーが見つかりません")
+  
+  logs = (
+    db.query(AttendanceLog)
+    .filter(
+      AttendanceLog.user_id == u.id,
+      AttendanceLog.ts >= start,
+      AttendanceLog.ts < end,
+      AttendanceLog.action.in_(ACTIONS),
+    )
+    .order_by(AttendanceLog.ts.asc())
+    .all()
+  )
+
+  raw_logs = []
+  for l in logs:
+    raw_logs.append({
+      "ts": l.ts.strftime("%Y-%m-%d %H:%M:%S") if l.ts else "",
+      "user": user,
+      "action": l.action or "",
+      "lat": "" if l.lat is None else l.lat,
+      "lon": "" if l.lon is None else l.lon,
+      "source": "" if getattr(l, "source", None) is None else l.source,      
+    })
+  
+  content = build_user_month_xlsx(
+    month=month,
+    user=user,
+    scheduled_minutes=MONTH_REQUIRED_MINUTES,
+    max_workdays=MONTH_MAX_WORK_DAYS,
+    details=detail["details"],
+    raw_logs=raw_logs,
+  )
+
+  filename = f"attendance_{month}_{user}.xlsx"
+  filename_star = quote(filename)
+  filename_ascii = filename.encode("ascii", "ignore").decode("ascii") or "attendance.xlsx"
+
+  return StreamingResponse(
+    io.BytesIO(content),
+    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    headers={
+      "Content-Disposition": f'attachment; filename="{filename_ascii}"; filename*=UTF-8\'\'{filename_star}'
+    },
+  )
+
+@app.get("/admin/users")
+def admin_list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+  users = db.query(User).order_by(User.id.asc()).all()
+  return {
+    "ok": True,
+    "users": [
+      {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active}
+      for u in users
+    ]
+  }
+
+@app.post("/admin/users")
+def admin_create_user(req: AdminCreateUserRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+  name = req.name.strip()
+  pin = req.pin.strip()
+  role = req.role.strip()
+
+  if not name:
+    raise HTTPException(status_code=400, detail="nameは必須です")
+  if not pin:
+    raise HTTPException(status_code=400, detail="pinは必須です")
+  if role not in ("user", "admin"):
+    raise HTTPException(status_code=400, detail="roleは user または admin")
+  
+  exists = db.query(User).filter(User.name == name).one_or_none()
+  if exists:
+    raise HTTPException(status_code=409, detail="同盟のユーザーが既に存在します")
+  
+  u = User(
+    name=name,
+    pin_hash=hash_pin(pin),
+    role=role,
+    is_active=True
+  )
+  db.add(u)
+  db.commit()
+
+  return {"ok": True, "user": {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active}}
+
+@app.patch("/admin/users")
+def admin_update_user(req: AdminUpdateUserRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+  name = req.name.strip()
+  if not name:
+    raise HTTPException(status_code=400, detail="nameは必須です")
+  
+  u = db.query(User).filter(User.name == name).one_or_none()
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+  
+  if req.role is not None:
+    role = req.role.strip()
+    if role not in ("user", "admin"):
+      raise HTTPException(status_code=400, detail="roleは user または admin")
+    u.role = role
+  
+  if req.is_active is not None:
+    u.is_active = bool(req.is_active)
+
+  if req.pin is not None:
+    pin = req.pin.strip()
+    if not pin:
+      raise HTTPException(status_code=400, detail="pinが空です")
+    u.pin_hash = hash_pin(pin)
+
+  db.commit()
+
+  return {"ok": True, "user": {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active}}
+
+@app.get("/me")
+def me(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+  u = db.query(User).filter(User.name == user, User.is_active == True).one_or_none()
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+  return {"ok": True, "user": u.name, "role": u.role} 
+
+@app.get("/me/month-summary")
+def my_month_summary(
+  month: str | None = None,
+  user: str = Depends(get_current_user),
+  db: Session = Depends(get_db)
+):
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+  
+  if not month:
+    now = datetime.now()
+    month = f"{now.year}-{str(now.month).zfill(2)}"
+
+  user_id = _get_user_id(db, user)
+  if user_id is None:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+  info = get_user_info(db, user_id)
+  logs = get_month_logs_for_user(db, user_id, month)
+  return calc_month_summary_from_logs(logs, month, info)

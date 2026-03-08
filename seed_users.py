@@ -1,7 +1,13 @@
+import os
+
 from db import SessionLocal, init_db, User
 from security import hash_pin
 
 def main():
+  if os.getenv("ENV") != "development":
+    print("seed skipped: ENV is not development")
+    return
+
   init_db()
   db = SessionLocal()
 
