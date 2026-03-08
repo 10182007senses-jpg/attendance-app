@@ -22,7 +22,7 @@ from security import verify_pin, hash_pin
 
 
 SESSION_RETENTION_DAYS = 30
-DEFAULT_USER = "瀬良 仁"
+DEFAULT_USER = "山田　太郎"
 SESSION_TTL_HOURS = 8       
 IDLE_TIMEOUT_MINUTES = 1000  
 
