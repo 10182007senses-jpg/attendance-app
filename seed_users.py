@@ -21,7 +21,7 @@ def main():
       u = User(name=name, pin_hash=hash_pin(pin), role=role, is_active=True)
       db.add(u)
 
-  upsert_user("瀬良 学", "0000", role="admin")
+  upsert_user("瀬良学", "0000", role="admin")
   
   db.commit()
   db.close()
