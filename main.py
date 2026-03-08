@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine
 from security import verify_pin, hash_pin
 from seed_users import main as seed_main
+from seed_users import seed_users
 
 
 SESSION_RETENTION_DAYS = 30
@@ -361,12 +362,9 @@ def startup():
     with SessionLocal() as db:
         cleanup_sessions(db)
 
-    # 初期ユーザー投入
-    try:
-        seed_main()
-    except Exception as e:
-        print("seed skipped:", e)
-
+        if db.query(User).count() == 0:
+            seed_users(db)
+            
 @app.get("/admin")
 def admin_page():
   if os.path.exists(ADMIN_FILE):
