@@ -19,10 +19,11 @@ from sqlalchemy.orm import Session
 
 from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine
 from security import verify_pin, hash_pin
+from seed_users import main as seed_main
 
 
 SESSION_RETENTION_DAYS = 30
-DEFAULT_USER = "山田　太郎"
+DEFAULT_USER = "山田太郎"
 SESSION_TTL_HOURS = 8       
 IDLE_TIMEOUT_MINUTES = 1000  
 
@@ -356,9 +357,15 @@ def cleanup_sessions(db: Session) -> int:
 @app.on_event("startup")
 def startup():
     init_db()
+
     with SessionLocal() as db:
         cleanup_sessions(db)
 
+    # 初期ユーザー投入
+    try:
+        seed_main()
+    except Exception as e:
+        print("seed skipped:", e)
 
 @app.get("/admin")
 def admin_page():
