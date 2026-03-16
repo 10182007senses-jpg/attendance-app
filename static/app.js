@@ -135,20 +135,30 @@
         })
       }
 
-      function getLocation() {
-        return new Promise((resolve, reject) => {
+      function getLocationOptional() {
+        return new Promise(resolve => {
           if (!navigator.geolocation) {
-            reject("このブラウザは位置情報に対応していません");
+            resolve({
+              lat: null,
+              lon: null,
+              locationError: "このブラウザは位置情報に対応していません"
+            });
+            return;
           }
 
           navigator.geolocation.getCurrentPosition(
             pos => {
               resolve({
                 lat: pos.coords.latitude,
-                lon: pos.coords.longitude
+                lon: pos.coords.longitude,
+                locationError: null
               });
             },
-            err => reject("位置情報を取得できません")
+            () => resolve({
+              lat: null,
+              lon: null,
+              locationError: "位置情報を取得できませんでした"
+            })
           );
         });
       }
@@ -161,14 +171,18 @@
         setButtonsDisabled(true);
         setStatus("記録中...");
         try {
-          const loc = await getLocation();
+          const loc = await getLocationOptional();
           const url = buildUrl(path, { lat: loc.lat, lon: loc.lon });
 
           const res = await fetchWithAuth(url);
           if (!res) return;
           const data = await res.json();
           if (data.status === "ok") {
-            setStatus("記録しました。", "ok");
+            if (loc.lat != null && loc.lon != null) {
+              setStatus("位置情報付きで記録しました。", "ok");
+            } else {
+              setStatus("位置情報なしで記録しました。ブラウザで位置情報を許可すると位置付きで保存できます。", "ok");
+            }
             await loadLogs();
             await loadCurrentState({ silent: true });
           } else {
