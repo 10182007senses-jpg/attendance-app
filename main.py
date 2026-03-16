@@ -908,7 +908,8 @@ def clock_in(user: str = Depends(get_current_user), lat: float = None, lon: floa
     row = add_log_db(db, ACTION_IN, user, lat, lon)
     return {"status": "ok", "data": row}
   
-  except Exception:
+  except Exception as e:
+    print("clock_in error:", repr(e))
     return {"error":"入室の記録に失敗しました。"}
 
   
@@ -923,7 +924,8 @@ def clock_out(user: str = Depends(get_current_user), lat: float = None, lon: flo
     
     row = add_log_db(db, ACTION_OUT, user, lat, lon)
     return {"status": "ok", "data": row}
-  except Exception:
+  except Exception as e:
+    print("clock_out error:", repr(e))
     return {"error": "退室の記録に失敗しました"}
 
 @app.get("/break-start")

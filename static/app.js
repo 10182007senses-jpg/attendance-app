@@ -170,7 +170,7 @@
           if (data.status === "ok") {
             setStatus("記録しました。", "ok");
             await loadLogs();
-            await loadCurrentState();
+            await loadCurrentState({ silent: true });
           } else {
             setStatus(data.error || "記録できませんでした。", "error");
           }
@@ -178,7 +178,7 @@
           setStatus(err || "通信エラーが発生しました。", "error");
         } finally {
           setButtonsDisabled(true);
-          await loadCurrentState();
+          await loadCurrentState({ silent: true });
         }
       }
 
@@ -207,8 +207,10 @@
         }
       }
 
-      async function loadCurrentState() {
-        setStatus("状態を取得中...");
+      async function loadCurrentState({ silent = false } = {}) {
+        if (!silent) {
+          setStatus("状態を取得中...");
+        }
         updateButtons(null);
         try {
           const res = await fetchWithAuth(buildUrl("/current-state"));
@@ -243,7 +245,9 @@
           }
 
           updateButtons(data.state);
-          setStatus("状態を更新しました。", "ok");
+          if (!silent) {
+            setStatus("状態を更新しました。", "ok");
+          }
         } catch {
           document.getElementById("current-state").innerText = "状態を取得できません"
           setStatus("状態の取得に失敗しました。", "error");
