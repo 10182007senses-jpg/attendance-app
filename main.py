@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine, now_jst
+from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine, now_jst_naive
 from security import verify_pin, hash_pin
 from seed_users import main as seed_main
 from seed_users import seed_users
@@ -337,7 +337,7 @@ def build_user_month_xlsx(
   return buf.getvalue()
   
 def cleanup_sessions(db: Session) -> int:
-  now = now_jst()
+  now = now_jst_naive()
   cutoff = now - timedelta(days=SESSION_RETENTION_DAYS)
 
   q = (
@@ -398,7 +398,7 @@ def month_range(month: str) -> tuple[datetime, datetime]:
   return start, end
 
 def _today_range() -> tuple[datetime, datetime]:
-  today = now_jst().date()
+  today = now_jst_naive().date()
   start = datetime.combine(today, time.min)
   end = start + timedelta(days=1)
   return start, end
@@ -406,7 +406,7 @@ def _today_range() -> tuple[datetime, datetime]:
 def _ensure_workday(db: Session, user_id: int, d:date) -> Workday:
   wd = db.query(Workday).filter(Workday.user_id == user_id, Workday.date == d).one_or_none()
   if wd is None:
-    wd = Workday(user_id=user_id, date=d, status="open", created_at=now_jst(), updated_at=now_jst())
+    wd = Workday(user_id=user_id, date=d, status="open", created_at=now_jst_naive(), updated_at=now_jst_naive())
     db.add(wd)
     db.flush()
   return wd
@@ -419,7 +419,7 @@ def add_log_db(db: Session, action: str, user_name: str, lat: float | None = Non
   if user_id is None:
     raise ValueError("unknown user")
   
-  now_dt = now_jst()
+  now_dt = now_jst_naive()
 
   log = AttendanceLog(user_id=user_id, action=action, ts=now_dt, lat=lat, lon=lon, source=None)
   db.add(log)
@@ -430,7 +430,7 @@ def add_log_db(db: Session, action: str, user_name: str, lat: float | None = Non
     wd.status = "open"
   elif action == ACTION_OUT:
     wd.status = "closed"
-  wd.updated_at = now_jst()
+  wd.updated_at = now_jst_naive()
 
   db.commit()
 
@@ -643,7 +643,7 @@ def get_acurrent_user_row(creds: HTTPAuthorizationCredentials | None = Depends(b
   
   session_id = creds.credentials
 
-  now = now_jst()
+  now = now_jst_naive()
   s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
   if not s:
     print("[auth] session not found:", session_id)
@@ -678,7 +678,7 @@ def get_current_user_row_from_cookie(
   if not session_id:
     return None
   
-  now = now_jst()
+  now = now_jst_naive()
   s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
   if not s or s.revoked or s.expires_at <= now:
     if s and s.expires_at <= now:
@@ -729,7 +729,7 @@ def get_current_user(session_id: str | None = Depends(get_session_id_from_cookie
   if not session_id:
     return None
   
-  now = now_jst()
+  now = now_jst_naive()
 
   s = (
     db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
@@ -855,7 +855,7 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     path="/",
   )
 
-  now = now_jst()
+  now = now_jst_naive()
 
   s = DbSession(
     id=session_id,
@@ -1465,7 +1465,7 @@ def my_month_summary(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
   
   if not month:
-    now = now_jst()
+    now = now_jst_naive()
     month = f"{now.year}-{str(now.month).zfill(2)}"
 
   user_id = _get_user_id(db, user)
