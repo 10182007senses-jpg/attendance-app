@@ -1,8 +1,4 @@
-      console.log("NEW APP JS LOADED v2");
-      alert("NEW APP JS LOADED v2");
-      
-      
-      function isLoggedIn() {
+       function isLoggedIn() {
         return !!sessionStorage.getItem("user");
       }
 

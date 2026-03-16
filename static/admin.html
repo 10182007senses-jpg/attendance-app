@@ -17,10 +17,19 @@
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         gap: 16px;
         align-items: stretch;
+        width: 100%;
+        min-width: 0;
+      }
+      .admin-controls .field-row > *,
+      .admin-grid > * {
+        min-width: 0;
+        max-width: 100%;
       }
       .admin-controls input,
       .admin-controls select {
         width: 100%;
+        max-width: 100%;
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 10px;
         padding: 10px 12px;
@@ -32,11 +41,19 @@
         gap: 12px;
         align-items: center;
         grid-column: 1 / -1;
+        width: 100%;
+        min-width: 0;
+      }
+      .admin-actions > * {
+        min-width: 0;
+        max-width: 100%;
       }
       .admin-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
         gap: 20px;
+        width: 100%;
+        min-width: 0;
       }
       .status {
         margin-top: 10px;
@@ -64,6 +81,7 @@
         display: flex;
         align-items: center;
         width: 100%;
+        min-width: 0;
       }
       #login-state {
         display: inline-block;
@@ -132,6 +150,16 @@
         gap: 8px;
         align-items: center;
       }
+      .table-wrap {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .table-wrap table {
+        min-width: 560px;
+      }
       .detail-reset {
         padding: 6px 12px;
         font-size: 12px;
@@ -146,12 +174,15 @@
         font-size: 12px;
         color: var(--muted);
         margin-top: 6px;
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       .action-cell {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
         align-items: center;
+        min-width: 0;
       }
       .action-toggle {
         background: none;
@@ -196,6 +227,76 @@
       }
       .hidden {
         display: none;
+      }
+      @media (max-width: 768px) {
+        .admin-controls .field-row,
+        .admin-grid {
+          grid-template-columns: 1fr;
+          gap: 14px;
+        }
+        .admin-actions {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+        .admin-controls .field-row > div,
+        .admin-controls .field-row > .panel,
+        .admin-grid > .panel {
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+        }
+        .admin-controls input,
+        .admin-controls select {
+          display: block;
+          width: 100%;
+          max-width: 100%;
+          min-height: 48px;
+          min-width: 0;
+          min-height: 48px;
+          font-size: 16px;
+        }
+        .admin-login {
+          gap: 10px;
+          width: 100%;
+          min-width: 0;
+        }
+        .admin-login .status-row,
+        .admin-login .action-row {
+          width: 100%;
+          min-width: 0;
+        }
+        #login-state {
+          width: 100%;
+          max-width: 100%;
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+        }
+        .detail-panel-header,
+        .detail-panel-actions {
+          flex-direction: column;
+          align-items: stretch;
+          width: 100%;
+          min-width: 0;
+        }
+        .admin-actions button,
+        .detail-panel-actions button,
+        .admin-login .action-row button {
+          display: block;
+          width: 100%;
+          max-width: 100%;
+          min-height: 48px;
+        }
+        .table-wrap table {
+          min-width: 520px;
+        }
+        .table-compact th,
+        .table-compact td {
+          white-space: nowrap;
+        }
+        .map-wrap {
+          height: 240px;
+        }
       }
     </style>
   </head>
@@ -289,19 +390,21 @@
       <div class="admin-grid">
         <div class="panel">
           <p class="panel-title">月次サマリー</p>
-          <table class="table-compact">
-            <thead>
-              <tr>
-                <th>ユーザー</th>
-                <th>稼働日</th>
-                <th>正常</th>
-                <th>不整合</th>
-                <th>未退室</th>
-                <th>実働</th>
-              </tr>
-            </thead>
-            <tbody id="summary-table"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table class="table-compact">
+              <thead>
+                <tr>
+                  <th>ユーザー</th>
+                  <th>稼働日</th>
+                  <th>正常</th>
+                  <th>不整合</th>
+                  <th>未退室</th>
+                  <th>実働</th>
+                </tr>
+              </thead>
+              <tbody id="summary-table"></tbody>
+            </table>
+          </div>
         </div>
 
         <div class="panel">
@@ -339,18 +442,20 @@
 
             <div class="status" id="users-status"></div>
 
-            <table class="table-compact" style="margin-top: 12px;">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>ユーザー</th>
-                  <th>権限</th>
-                  <th>状態</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="users-table"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="table-compact" style="margin-top: 12px;">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>ユーザー</th>
+                    <th>権限</th>
+                    <th>状態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="users-table"></tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -366,18 +471,20 @@
           <div id="detail-header" class="hint">ユーザーを選択して詳細を表示します。</div>
           <div id="detail-summary" class="detail-summary"></div>
           <div id="detail-content">
-            <table class="table-compact">
-              <thead>
-                <tr>
-                  <th>日付</th>
-                  <th>開始</th>
-                  <th>終了</th>
-                  <th>実働</th>
-                  <th>打刻</th>
-                </tr>
-              </thead>
-              <tbody id="detail-table"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="table-compact">
+                <thead>
+                  <tr>
+                    <th>日付</th>
+                    <th>開始</th>
+                    <th>終了</th>
+                    <th>実働</th>
+                    <th>打刻</th>
+                  </tr>
+                </thead>
+                <tbody id="detail-table"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
