@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, date
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     create_engine,
@@ -18,6 +19,11 @@ from sqlalchemy.engine import Engine
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+JST = ZoneInfo("Asia/Tokyo")
+
+
+def now_jst() -> datetime:
+    return datetime.now(JST)
 
 # ローカルは attendance.db、Render free は /tmp に逃がす
 LOCAL_DB_PATH = os.path.join(BASE_DIR, "attendance.db")
@@ -97,8 +103,8 @@ class Workday(Base):
     date: Mapped[date] = mapped_column(Date, index=True)  # type: ignore
 
     status: Mapped[str] = mapped_column(String(20), default="open")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst, onupdate=now_jst)
 
     user: Mapped["User"] = relationship(back_populates="workdays")
 
@@ -109,10 +115,10 @@ class Session(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst, index=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 
     device_label: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
