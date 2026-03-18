@@ -442,6 +442,50 @@ def add_log_db(db: Session, action: str, user_name: str, lat: float | None = Non
     "経度": lon,
   }
 
+def recalc_workday(db: Session, user_id: int, d: date) -> dict:
+  start = datetime.combine(d, time.min)
+  end = start + timedelta(days=1)
+  logs = (
+    db.query(AttendanceLog)
+    .filter(
+      AttendanceLog.user_id == user_id,
+      AttendanceLog.ts >= start,
+      AttendanceLog.ts < end,
+      AttendanceLog.action.in_(ACTIONS),
+    )
+    .order_by(AttendanceLog.ts.asc())
+    .all()
+  )
+
+  wd = db.query(Workday).filter(Workday.user_id == user_id, Workday.date == d).one_or_none()
+  result = calc_day_from_logs(logs)
+
+  if not logs:
+    if wd is not None:
+      db.delete(wd)
+      db.commit()
+    return result
+
+  if wd is None:
+    wd = _ensure_workday(db, user_id, d)
+
+  wd.status = "closed" if logs[-1].action == ACTION_OUT else "open"
+  wd.updated_at = now_jst_naive()
+  db.commit()
+  return result
+
+def normalize_admin_action(action_type: str) -> str:
+  mapping = {
+    "clock_in": ACTION_IN,
+    "clock_out": ACTION_OUT,
+    ACTION_IN: ACTION_IN,
+    ACTION_OUT: ACTION_OUT,
+  }
+  action = mapping.get(action_type)
+  if action is None:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="type は clock_in または clock_out を指定してください")
+  return action
+
 def get_last_action_db(db: Session, user_name:str) -> str | None:
   user_id = _get_user_id(db, user_name)
   if user_id is None:
@@ -714,6 +758,14 @@ class UserSettingsRequest(BaseModel):
   required_hours: float | None = None
   max_work_days: int | None = None
 
+class AdminLogUpdateRequest(BaseModel):
+  ts: datetime
+
+class AdminLogCreateRequest(BaseModel):
+  user_id: int
+  type: str
+  ts: datetime
+
 class AdminCreateUserRequest(BaseModel):
   name: str
   pin: str
@@ -874,6 +926,50 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
 @app.get("/admin/ping")
 def admin_ping(admin: User = Depends(require_admin)):
   return {"ok": True, "user": admin.name}
+
+@app.patch("/admin/log/{log_id}")
+def admin_update_log(
+  log_id: int,
+  body: AdminLogUpdateRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db),
+):
+  log = db.query(AttendanceLog).filter(AttendanceLog.id == log_id).one_or_none()
+  if log is None:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="打刻が見つかりません")
+
+  old_date = log.ts.date()
+  log.ts = body.ts
+  db.commit()
+
+  affected_dates = {old_date, body.ts.date()}
+  results = {str(d): recalc_workday(db, log.user_id, d) for d in sorted(affected_dates)}
+  return {"ok": True, "log_id": log.id, "user_id": log.user_id, "ts": log.ts.isoformat(), "results": results}
+
+@app.post("/admin/log")
+def admin_create_log(
+  body: AdminLogCreateRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db),
+):
+  user = db.query(User).filter(User.id == body.user_id, User.is_active == True).one_or_none()
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+
+  log = AttendanceLog(
+    user_id=body.user_id,
+    action=normalize_admin_action(body.type),
+    ts=body.ts,
+    lat=None,
+    lon=None,
+    source="admin",
+  )
+  db.add(log)
+  db.commit()
+  db.refresh(log)
+
+  result = recalc_workday(db, log.user_id, log.ts.date())
+  return {"ok": True, "log_id": log.id, "user_id": log.user_id, "ts": log.ts.isoformat(), "result": result}
 
 
 @app.post("/logout")
@@ -1081,7 +1177,7 @@ def admin_user_detail(
       "gross": sec_to_hm(r["gross_sec"]),
       "net": sec_to_hm(r["net_sec"]),
       "action": [
-        {"action":l.action, "time": l.ts.strftime("%H:%M:%S"), "lat": l.lat, "lon": l.lon,}
+        {"id": l.id, "action":l.action, "time": l.ts.strftime("%H:%M:%S"), "lat": l.lat, "lon": l.lon,}
         for l in sorted(day_map[d], key=lambda x: x.ts)
       ],
     })

@@ -184,6 +184,41 @@
         align-items: center;
         min-width: 0;
       }
+      .action-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 100%;
+      }
+      .action-item {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        align-items: center;
+        padding: 6px 8px;
+        border: 1px solid #e8dcc8;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.7);
+      }
+      .action-item.editing {
+        border-color: #d7b067;
+        background: #fff8ea;
+      }
+      .action-time {
+        min-width: 58px;
+        font-variant-numeric: tabular-nums;
+      }
+      .inline-time {
+        width: 110px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid #d6c4a7;
+      }
+      .mini-btn {
+        padding: 5px 10px;
+        font-size: 12px;
+        border-radius: 999px;
+      }
       .action-toggle {
         background: none;
         border: none;
@@ -510,6 +545,7 @@
       const MAX_ACTION_CHARS = 40;
       const expandedActionRows = new Map();
       let lastDetailData = null;
+      let editingLogId = null;
       let isDetailExpanded = true;
       let isUserPanelExpanded = true;
 
@@ -848,6 +884,34 @@
         return actions.map(a => `${a.action} ${a.time}`).join(" / ");
       }
 
+      function toTimeInputValue(value) {
+        return String(value || "").slice(0, 5);
+      }
+
+      function renderActionList(actions, date) {
+        return `
+          <div class="action-list">
+            ${actions.map((a) => {
+              const isEditing = editingLogId === Number(a.id);
+              const safeAction = escapeHtml(a.action || "");
+              const safeTime = escapeHtml(a.time || "");
+              const inputValue = escapeHtml(toTimeInputValue(a.time));
+              return `
+                <div class="action-item${isEditing ? " editing" : ""}">
+                  <span>${safeAction}</span>
+                  ${isEditing
+                    ? `<input class="inline-time" type="time" value="${inputValue}" data-role="time-input" data-log-id="${a.id}" />
+                       <button class="mini-btn" data-action="save-log" data-log-id="${a.id}" data-date="${date}">保存</button>
+                       <button class="mini-btn secondary" data-action="cancel-edit">キャンセル</button>`
+                    : `<span class="action-time">${safeTime}</span>
+                       <button class="mini-btn secondary" data-action="edit-log" data-log-id="${a.id}">編集</button>`}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `;
+      }
+
       function truncateActions(text) {
         if (text.length <= MAX_ACTION_CHARS) {
           return { text, truncated: false };
@@ -890,7 +954,8 @@
           const fullActions = formatActions(day.action);
           const isExpanded = expandedActionRows.get(key) === true;
           const truncated = truncateActions(fullActions);
-          const displayActions = isExpanded ? fullActions : truncated.text;
+          const shouldShowActionList = fullActions !== "-" && (!truncated.truncated || isExpanded);
+          const displayActions = shouldShowActionList ? renderActionList(day.action || [], key) : escapeHtml(truncated.text);
           const showToggle = fullActions !== "-" && (truncated.truncated || isExpanded);
           const toggleLabel = isExpanded ? "折りたたむ" : "もっと見る";
 
@@ -902,7 +967,7 @@
             <td>${day.net}</td>
             <td>
               <div class="action-cell">
-                <span class="action-text">${displayActions}</span>
+                <div class="action-text">${displayActions}</div>
                 ${showToggle ? `<button class="action-toggle" data-action="toggle-action" data-date="${key}">${toggleLabel}</button>` : ""}
               </div>
             </td>
@@ -937,12 +1002,32 @@
           return;
         }
         expandedActionRows.clear();
+        editingLogId = null;
         lastDetailData = data;
         isDetailExpanded = true;
         updateDetailPanelState();
         document.getElementById("detail-header").innerText = `${data.user} / ${data.month}`;
         renderDetail(data);
         setStatus("詳細を更新しました", "ok");
+      }
+
+      async function updateLog(logId, date, time) {
+        const ts = `${date}T${time}:00`;
+        const res = await fetchWithAuth(`/admin/log/${logId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ts }),
+        });
+        if (!res) return false;
+        const data = await res.json();
+        if (!data.ok) {
+          alert(data.error || "更新失敗");
+          return false;
+        }
+        alert("更新しました");
+        editingLogId = null;
+        await loadUserDetail();
+        return true;
       }
 
       async function downloadCsv() {
@@ -1079,13 +1164,47 @@
       });
 
       document.getElementById("detail-table").addEventListener("click", (event) => {
-        const target = event.target.closest("button[data-action='toggle-action']");
+        const target = event.target.closest("button[data-action]");
         if (!target) return;
-        const key = target.dataset.date;
-        const current = expandedActionRows.get(key) === true;
-        expandedActionRows.set(key, !current);
-        if (lastDetailData) {
-          renderDetail(lastDetailData);
+
+        if (target.dataset.action === "toggle-action") {
+          const key = target.dataset.date;
+          const current = expandedActionRows.get(key) === true;
+          expandedActionRows.set(key, !current);
+          editingLogId = null;
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
+        if (target.dataset.action === "edit-log") {
+          editingLogId = Number(target.dataset.logId);
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
+        if (target.dataset.action === "cancel-edit") {
+          editingLogId = null;
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
+        if (target.dataset.action === "save-log") {
+          const logId = Number(target.dataset.logId);
+          const date = target.dataset.date;
+          const row = target.closest(".action-item");
+          const input = row ? row.querySelector("input[data-role='time-input']") : null;
+          const time = input ? input.value : "";
+          if (!date || !time) {
+            alert("時刻を入力してください");
+            return;
+          }
+          updateLog(logId, date, time);
         }
       });
       
