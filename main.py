@@ -156,30 +156,36 @@ def build_user_month_xlsx(
 
   ws["A1"] = "勤怠確認票（月次）"
   ws["A1"].font = Font(bold=True, size=14)
-  ws.merge_cells("A1:G1")
+  ws.merge_cells("A1:D1")
   ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+  ws["E1"] = "Quesera Grace 株式会社"
+  ws["E1"].font = Font(bold=True, size=12)
+  ws.merge_cells("E1:G1")
+  ws["E1"].alignment = Alignment(horizontal="center", vertical="center")
   ws.row_dimensions[1].height = 26
 
   # Header block
   ws["A3"] = "対象月"
-  ws["D3"] = month
-  ws["F3"] = "氏名"
-  ws["G3"] = user
+  ws["C3"] = month
+  ws["E3"] = "氏名"
+  ws["F3"] = user
   ws["A4"] = "所定労働時間"
-  ws["D4"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
-  ws["F4"] = "最大出勤日"
-  ws["G4"] = str(max_workdays)
-  ws.merge_cells("A3:C3")
-  ws.merge_cells("A4:C4")
-  ws.merge_cells("D3:E3")
-  ws.merge_cells("D4:E4")
+  ws["C4"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
+  ws["E4"] = "最大出勤日"
+  ws["F4"] = str(max_workdays)
+  ws.merge_cells("C3:D3")
+  ws.merge_cells("C4:D4")
+  ws.merge_cells("F3:G3")
+  ws.merge_cells("F4:G4")
   _style_range(ws, "A3:G4", bold=False, fill=True, center=False)
   _style_range(ws, "A3:A4", bold=True, fill=False, center=False)
-  _style_range(ws, "F3:F4", bold=True, fill=False, center=False)
+  _style_range(ws, "E3:E4", bold=True, fill=False, center=False)
   _set_outer_border(ws, "A3:G4")
   label_align = Alignment(horizontal="left", vertical="center", wrap_text=False)
   ws["A3"].alignment = label_align
   ws["A4"].alignment = label_align
+  ws["E3"].alignment = label_align
+  ws["E4"].alignment = label_align
   ws.row_dimensions[3].height = 20
   ws.row_dimensions[4].height = 20
 
@@ -252,9 +258,9 @@ def build_user_month_xlsx(
   data_end_row = row - 1
   
   sum_row = row + 1
-  ws.merge_cells(f"A{sum_row}:G{sum_row}")
+  ws.merge_cells(f"A{sum_row}:D{sum_row}")
   ws[f"A{sum_row}"] = "月次集計"
-  _style_range(ws, f"A{sum_row}:G{sum_row}", bold=True, fill=True, center=True)
+  _style_range(ws, f"A{sum_row}:D{sum_row}", bold=True, fill=True, center=True)
 
   ws[f"A{sum_row+1}"] = "実出勤日"
   ws[f"D{sum_row+1}"] = actual_days
