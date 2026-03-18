@@ -569,9 +569,10 @@
 
         mapMarkers.clearLayers();
         valid.forEach(a => {
+          const dateStr = a.date || "";
           L.marker([a.lat, a.lon])
             .addTo(mapMarkers)
-            .bindPopup(`${a.action} ${a.time}`);
+            .bindPopup(`${dateStr}<br>${a.action}<br>${a.time}`);
         });
 
         if (valid.length === 1) {
@@ -870,7 +871,7 @@
         data.details.forEach(d => {
           d.action.forEach(a => {
             if (typeof a.lat === "number" && typeof a.lon === "number") {
-              allActions.push(a);
+              allActions.push({ ...a, date: d.date });
             }
           });
         });
