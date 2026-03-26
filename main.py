@@ -828,6 +828,12 @@ class AdminFullDayLogCreateRequest(BaseModel):
   clock_in: str
   clock_out: str
 
+class AdminFillMissingLogRequest(BaseModel):
+  user_id: int
+  date: str
+  type: str
+  time: str
+
 class MonthConfirmRequest(BaseModel):
   month: str
 
@@ -1149,6 +1155,66 @@ def admin_create_full_day_logs(
 
   recalc_workday(db, body.user_id, clock_in_dt.date())
   return {"status": "ok"}
+
+@app.post("/admin/logs/fill-missing")
+def admin_fill_missing_log(
+  body: AdminFillMissingLogRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db),
+):
+  user = db.query(User).filter(User.id == body.user_id, User.is_active == True).one_or_none()
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+
+  action = normalize_admin_action(body.type)
+  target_dt = combine_jst_naive_datetime(body.date, body.time)
+  day_start = datetime.combine(target_dt.date(), time.min)
+  day_end = day_start + timedelta(days=1)
+  logs = (
+    db.query(AttendanceLog)
+    .filter(
+      AttendanceLog.user_id == body.user_id,
+      AttendanceLog.ts >= day_start,
+      AttendanceLog.ts < day_end,
+      AttendanceLog.action.in_(ACTIONS),
+    )
+    .order_by(AttendanceLog.ts.asc())
+    .all()
+  )
+  if not logs:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="その日はログがありません。1日分追加を使ってください。")
+
+  if any(log.action == action for log in logs):
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{body.type}ログはすでに存在します。")
+
+  if action == ACTION_IN:
+    first_out = min((log.ts for log in logs if log.action == ACTION_OUT), default=None)
+    if first_out is None:
+      raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="補完できる退室ログがありません。")
+    if target_dt >= first_out:
+      raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="入室補完は既存の退室時刻より前にしてください。")
+  elif action == ACTION_OUT:
+    last_in = max((log.ts for log in logs if log.action == ACTION_IN), default=None)
+    if last_in is None:
+      raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="補完できる入室ログがありません。")
+    if target_dt <= last_in:
+      raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="退室補完は既存の入室時刻より後にしてください。")
+
+  log = AttendanceLog(
+    user_id=body.user_id,
+    action=action,
+    ts=target_dt,
+    lat=None,
+    lon=None,
+    source="admin",
+  )
+  db.add(log)
+  invalidate_month_confirmation(db, body.user_id, target_dt)
+  db.commit()
+  db.refresh(log)
+
+  result = recalc_workday(db, log.user_id, log.ts.date())
+  return {"ok": True, "log_id": log.id, "result": result}
 
 
 @app.post("/logout")

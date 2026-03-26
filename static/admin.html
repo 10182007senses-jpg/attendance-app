@@ -582,6 +582,7 @@
       let lastDetailData = null;
       let editingLogId = null;
       let addingFullDayDate = null;
+      let fillingMissingDate = null;
       let isDetailExpanded = false;
       let isMonthlyHoursExpanded = false;
       let isUserPanelExpanded = false;
@@ -995,6 +996,15 @@
         };
       }
 
+      function getMissingLogType(day) {
+        const actions = day && day.action ? day.action : [];
+        const hasIn = actions.some((a) => a.action === "入室");
+        const hasOut = actions.some((a) => a.action === "退室");
+        if (hasIn && !hasOut) return "退室";
+        if (!hasIn && hasOut) return "入室";
+        return null;
+      }
+
       function buildCalendarDetails(month, details) {
         if (!month) return details || [];
         const [year, mon] = month.split("-").map(Number);
@@ -1009,8 +1019,9 @@
         return rows;
       }
 
-      function renderFullDayAddControls(date, userId) {
+      function renderFullDayAddControls(date, userId, actions) {
         if (!userId) return "";
+        if (actions && actions.length > 0) return "";
         const isAdding = addingFullDayDate === date;
         if (!isAdding) {
           return `
@@ -1026,6 +1037,30 @@
               <label>退室 <input class="inline-time" type="time" data-role="clock-out-input" value="18:00" /></label>
               <button class="mini-btn" data-action="save-full-day" data-date="${date}" data-user-id="${userId}">保存</button>
               <button class="mini-btn secondary" data-action="cancel-full-day">キャンセル</button>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderMissingLogControls(day, userId) {
+        if (!userId) return "";
+        const missingType = getMissingLogType(day);
+        if (!missingType) return "";
+        const isFilling = fillingMissingDate === day.date;
+        const defaultTime = missingType === "入室" ? "09:00" : "18:00";
+        if (!isFilling) {
+          return `
+            <div class="full-day-add">
+              <button class="mini-btn secondary" data-action="start-fill-missing" data-date="${day.date}" data-user-id="${userId}" data-type="${missingType}">${missingType}補完</button>
+            </div>
+          `;
+        }
+        return `
+          <div class="full-day-add">
+            <div class="full-day-fields">
+              <label>${missingType} <input class="inline-time" type="time" data-role="missing-time-input" value="${defaultTime}" /></label>
+              <button class="mini-btn" data-action="save-fill-missing" data-date="${day.date}" data-user-id="${userId}" data-type="${missingType}">保存</button>
+              <button class="mini-btn secondary" data-action="cancel-fill-missing">キャンセル</button>
             </div>
           </div>
         `;
@@ -1115,7 +1150,8 @@
             <td>
               <div class="action-cell">
                 <div class="action-text">${displayActions}</div>
-                ${renderFullDayAddControls(key, data.user_id)}
+                ${renderFullDayAddControls(key, data.user_id, day.action || [])}
+                ${renderMissingLogControls(day, data.user_id)}
                 ${showToggle ? `<button class="action-toggle" data-action="toggle-action" data-date="${key}">${toggleLabel}</button>` : ""}
               </div>
             </td>
@@ -1152,6 +1188,7 @@
         expandedActionRows.clear();
         editingLogId = null;
         addingFullDayDate = null;
+        fillingMissingDate = null;
         lastDetailData = {
           ...data,
           details: buildCalendarDetails(month, data.details || []),
@@ -1201,6 +1238,29 @@
         }
         alert("追加しました");
         addingFullDayDate = null;
+        await loadUserDetail();
+        return true;
+      }
+
+      async function fillMissingLog(userId, date, type, time) {
+        const res = await fetchWithAuth("/admin/logs/fill-missing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: Number(userId),
+            date,
+            type,
+            time,
+          }),
+        });
+        if (!res) return false;
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          alert(data.detail || data.error || "補完に失敗しました");
+          return false;
+        }
+        alert(`${type}を補完しました`);
+        fillingMissingDate = null;
         await loadUserDetail();
         return true;
       }
@@ -1372,6 +1432,7 @@
 
         if (target.dataset.action === "start-full-day") {
           addingFullDayDate = target.dataset.date || null;
+          fillingMissingDate = null;
           editingLogId = null;
           if (lastDetailData) {
             renderDetail(lastDetailData);
@@ -1387,8 +1448,27 @@
           return;
         }
 
+        if (target.dataset.action === "start-fill-missing") {
+          fillingMissingDate = target.dataset.date || null;
+          addingFullDayDate = null;
+          editingLogId = null;
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
+        if (target.dataset.action === "cancel-fill-missing") {
+          fillingMissingDate = null;
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
         if (target.dataset.action === "edit-log") {
           addingFullDayDate = null;
+          fillingMissingDate = null;
           editingLogId = Number(target.dataset.logId);
           if (lastDetailData) {
             renderDetail(lastDetailData);
@@ -1435,6 +1515,21 @@
             return;
           }
           addFullDayLog(userId, date, clockIn, clockOut);
+          return;
+        }
+
+        if (target.dataset.action === "save-fill-missing") {
+          const userId = Number(target.dataset.userId);
+          const date = target.dataset.date;
+          const type = target.dataset.type;
+          const wrap = target.closest(".full-day-add");
+          const timeInput = wrap ? wrap.querySelector("input[data-role='missing-time-input']") : null;
+          const inputTime = timeInput ? timeInput.value : "";
+          if (!date || !type || !inputTime) {
+            alert("時刻を入力してください");
+            return;
+          }
+          fillMissingLog(userId, date, type, inputTime);
         }
       });
       
