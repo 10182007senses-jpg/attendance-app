@@ -242,6 +242,34 @@
         font-size: 16px;
         font-weight: 600;
       }
+      #today-note-input {
+        width: 100%;
+        display: block;
+        min-height: 88px;
+        resize: vertical;
+        border: 1px solid #e1d6c3;
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 15px;
+        background: #fffdf8;
+        color: var(--ink);
+      }
+      #today-note-section .footer {
+        justify-content: space-between;
+      }
+      #today-note-section {
+        max-width: 100%;
+      }
+      #today-note-status {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      #today-note-status.ok {
+        color: var(--accent);
+      }
+      #today-note-status.error {
+        color: #b54836;
+      }
       @keyframes floatIn {
         from {
           opacity: 0;

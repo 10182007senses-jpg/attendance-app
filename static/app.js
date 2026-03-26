@@ -35,15 +35,16 @@
           });
           const data = await res.json();
 
-          if (data.ok) {
-            sessionStorage.setItem("role", data.role || "");
-            sessionStorage.setItem("user", data.user);
-            setButtonsDisabled(true);
-            setStatus(`${data.user}でログインしました`, "ok");
-            applyLoginState();
-            await loadLogs();
-            await loadCurrentState();
-          } else {
+	          if (data.ok) {
+	            sessionStorage.setItem("role", data.role || "");
+	            sessionStorage.setItem("user", data.user);
+	            setButtonsDisabled(true);
+	            setStatus(`${data.user}でログインしました`, "ok");
+	            applyLoginState();
+	            await loadLogs();
+	            await loadCurrentState();
+	            await loadPreviousMonthSection();
+	          } else {
             setStatus(data.error || "ログインできませんでした", "error");
           }
         } catch (e) {
@@ -68,6 +69,16 @@
         return {};
       }
 
+      function setTodayNoteStatus(text, type = "info") {
+        const status = document.getElementById("today-note-status");
+        if (!status) return;
+        status.className = "";
+        if (type !== "info") {
+          status.classList.add(type);
+        }
+        status.innerText = text;
+      }
+
       function applyLoginState() {
         const user = sessionStorage.getItem("user");
 
@@ -77,20 +88,26 @@
         const loginState = document.getElementById("login-state");
         const loginNameInput = document.getElementById("login-name");
         const loginPinInput = document.getElementById("login-pin");
+        const noteInput = document.getElementById("today-note-input");
+        const noteSaveBtn = document.getElementById("save-today-note-btn");
 
-        if (isLoggedIn()) {
-          loginPanel.style.display = "none";
+	        if (isLoggedIn()) {
+	          loginPanel.style.display = "none";
           if (userInput) userInput.style.display = "flex";
           if (userNameInput) userNameInput.value = user;
           if (userNameInput) userNameInput.disabled = true;
           if (loginState) loginState.innerText = `${user}でログイン中`;
           if (loginNameInput) loginNameInput.disabled = true;
           updateTodayLabel();
-          loadLogs();
-          loadCurrentState();
-          loadWorkTime();
-          loadMonthSummary();
-        } else {
+	          loadLogs();
+	          loadCurrentState();
+	          loadWorkTime();
+	          loadMonthSummary();
+	          loadPreviousMonthSection();
+            if (noteInput) noteInput.disabled = false;
+            if (noteSaveBtn) noteSaveBtn.disabled = false;
+            loadTodayNote();
+	        } else {
           loginPanel.style.display = "block";
           if (userInput) userInput.style.display = "none";
           if (userNameInput) userNameInput.disabled = false;
@@ -98,17 +115,29 @@
           if (loginNameInput) loginNameInput.value = "";
           if (loginNameInput) loginNameInput.disabled = false;
           if (loginPinInput) loginPinInput.value = "";
-          document.getElementById("current-state").innerText = "未ログイン";
-          document.getElementById("log-table").innerHTML = `<tr><td colspan="3">ログインしてください。</td></tr>`;
+	          document.getElementById("current-state").innerText = "未ログイン";
+	          document.getElementById("log-table").innerHTML = `<tr><td colspan="3">ログインしてください。</td></tr>`;
+	          document.getElementById("previous-month-summary").innerText = "ログインしてください。";
+	          document.getElementById("previous-month-confirm-status").innerText = "";
+	          document.getElementById("previous-month-logs").innerHTML = "";
+	          document.getElementById("confirm-previous-month-btn").disabled = true;
+	          previousMonthState = { month: null, confirmed: false };
+            if (noteInput) {
+              noteInput.value = "";
+              noteInput.disabled = true;
+            }
+            if (noteSaveBtn) noteSaveBtn.disabled = true;
+            setTodayNoteStatus("ログインしてください。");
 
-          setButtonsDisabled(true)
-        }
+	          setButtonsDisabled(true)
+	        }
       }
 
-      const DEFAULT_USER = "瀬良 仁";
-      const STATE_NOT_IN = "未入室";
-      const STATE_IN_ROOM = "在室中";
-      const STATE_UNKNOWN = "不明";
+	      const DEFAULT_USER = "瀬良 仁";
+	      const STATE_NOT_IN = "未入室";
+	      const STATE_IN_ROOM = "在室中";
+	      const STATE_UNKNOWN = "不明";
+	      let previousMonthState = { month: null, confirmed: false };
 
 
       function getUser() {
@@ -287,6 +316,56 @@
         }
       }
 
+      async function loadTodayNote({ silent = true } = {}) {
+        if (!isLoggedIn()) return;
+        if (!silent) {
+          setTodayNoteStatus("備考を取得中...");
+        }
+        try {
+          const res = await fetchWithAuth("/today-note");
+          if (!res) return;
+          const data = await res.json();
+          const input = document.getElementById("today-note-input");
+          if (input) {
+            input.value = data.note || "";
+          }
+          setTodayNoteStatus(data.note ? "保存済みの備考を読み込みました。" : "未保存です。");
+        } catch (e) {
+          setTodayNoteStatus("備考を取得できませんでした。", "error");
+        }
+      }
+
+      async function saveTodayNote() {
+        if (!isLoggedIn()) {
+          setTodayNoteStatus("ログインしてください。", "error");
+          return;
+        }
+        const input = document.getElementById("today-note-input");
+        const button = document.getElementById("save-today-note-btn");
+        if (!input || !button) return;
+
+        button.disabled = true;
+        setTodayNoteStatus("保存中...");
+        try {
+          const res = await fetchWithAuth("/today-note", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ note: input.value || "" }),
+          });
+          if (!res) return;
+          const data = await res.json();
+          if (data.status === "ok") {
+            setTodayNoteStatus("保存しました。", "ok");
+          } else {
+            setTodayNoteStatus(data.error || "保存できませんでした。", "error");
+          }
+        } catch (e) {
+          setTodayNoteStatus("通信エラーが発生しました。", "error");
+        } finally {
+          button.disabled = false;
+        }
+      }
+
       function getCurrentMonthStr() {
         const now = new Date();
         const y = now.getFullYear();
@@ -294,8 +373,8 @@
         return `${y}-${m}`;
       }
 
-      async function loadMonthSummary() {
-        setStatus("今月のサマリーを取得中...");
+	      async function loadMonthSummary() {
+	        setStatus("今月のサマリーを取得中...");
 
         try {
           const month = getCurrentMonthStr();
@@ -319,16 +398,157 @@
 
           if (detailEl) {
             detailEl.innerText =
-            `出勤日数：${data.worked_days}日（上限 ${data.max_work_days}日） / 残り：${data.remaining_time} / 残り出勤可能日：${data.remaining_days}日`;
+            `出勤日数：${data.worked_days}日 / 残り：${data.remaining_time}`;
           }
 
           setStatus("今月のサマリーを更新しました", "ok");
-        } catch (e) { 
-          setStatus("通信エラーが発生しました。", "error");
-        }
-      }
+	        } catch (e) { 
+	          setStatus("通信エラーが発生しました。", "error");
+	        }
+	      }
 
-      async function loadLogs() {
+	      function formatConfirmDateTime(value) {
+	        if (!value) return "";
+	        const dt = new Date(value);
+	        if (Number.isNaN(dt.getTime())) return value;
+	        const y = dt.getFullYear();
+	        const m = String(dt.getMonth() + 1).padStart(2, "0");
+	        const d = String(dt.getDate()).padStart(2, "0");
+	        const hh = String(dt.getHours()).padStart(2, "0");
+	        const mm = String(dt.getMinutes()).padStart(2, "0");
+	        return `${y}-${m}-${d} ${hh}:${mm}`;
+	      }
+
+	      function renderPreviousMonthLogs(details) {
+	        const logsEl = document.getElementById("previous-month-logs");
+	        if (!logsEl) return;
+
+	        if (!details || details.length === 0) {
+	          logsEl.innerHTML = `<div style="font-size:13px; color:#555;">対象月のログはありません。</div>`;
+	          return;
+	        }
+
+	        const rows = details.map(day => {
+	          const actions = (day.action || [])
+	            .map(action => `${action.action} ${action.time}`)
+	            .join("<br>");
+            const remark = day.remark || (!day.ok ? (day.error || "") : "");
+	          return `
+	            <tr>
+	              <td>${day.date || "-"}</td>
+	              <td>${day.start || "-"}</td>
+	              <td>${day.end || "-"}</td>
+	              <td>${day.net || "-"}</td>
+	              <td>${remark || "-"}</td>
+	              <td>${actions || "-"}</td>
+	            </tr>
+	          `;
+	        }).join("");
+
+	        logsEl.innerHTML = `
+	          <table>
+	            <thead>
+	              <tr>
+	                <th>日付</th>
+	                <th>開始</th>
+	                <th>終了</th>
+	                <th>実働</th>
+	                <th>備考</th>
+	                <th>打刻</th>
+	              </tr>
+	            </thead>
+	            <tbody>${rows}</tbody>
+	          </table>
+	        `;
+	      }
+
+	      async function loadPreviousMonthSection({ silent = true } = {}) {
+	        if (!isLoggedIn()) return;
+	        if (!silent) {
+	          setStatus("先月分の勤務実績を取得中...");
+	        }
+
+	        try {
+	          const [detailRes, confirmationRes] = await Promise.all([
+	            fetchWithAuth("/me/previous-month-detail"),
+	            fetchWithAuth("/me/previous-month-confirmation"),
+	          ]);
+	          if (!detailRes || !confirmationRes) return;
+
+	          const detailData = await detailRes.json();
+	          const confirmationData = await confirmationRes.json();
+	          const summaryEl = document.getElementById("previous-month-summary");
+	          const statusEl = document.getElementById("previous-month-confirm-status");
+	          const confirmBtn = document.getElementById("confirm-previous-month-btn");
+
+	          if (detailData.error) {
+	            summaryEl.innerText = detailData.error;
+	            if (statusEl) statusEl.innerText = "";
+	            if (confirmBtn) confirmBtn.disabled = true;
+	            renderPreviousMonthLogs([]);
+	            setStatus("先月分を取得できませんでした。", "error");
+	            return;
+	          }
+
+	          previousMonthState = {
+	            month: detailData.month,
+	            confirmed: !!confirmationData.confirmed,
+	          };
+
+	          const summary = detailData.summary || {};
+	          summaryEl.innerText = `${detailData.month} 実働：${summary.worked_time || "0時間0分"} / 所定：${summary.required_hours || 0}時間`;
+	          renderPreviousMonthLogs(detailData.details || []);
+
+	          if (confirmationData.confirmed) {
+	            statusEl.innerText = `${formatConfirmDateTime(confirmationData.confirmed_at)} に ${confirmationData.confirmed_name} として確認済みです`;
+	            confirmBtn.disabled = true;
+	          } else {
+	            statusEl.innerText = "未確認です。内容を確認したらボタンを押してください。";
+	            confirmBtn.disabled = false;
+	          }
+
+	          if (!silent) {
+	            setStatus("先月分を更新しました。", "ok");
+	          }
+	        } catch (e) {
+	          setStatus("通信エラーが発生しました。", "error");
+	        }
+	      }
+
+	      async function confirmPreviousMonth() {
+	        if (!isLoggedIn() || !previousMonthState.month) {
+	          setStatus("先月分の対象月を取得できていません。", "error");
+	          return;
+	        }
+
+	        const confirmBtn = document.getElementById("confirm-previous-month-btn");
+	        if (confirmBtn) confirmBtn.disabled = true;
+	        setStatus("先月分の確認を保存中...");
+
+	        try {
+	          const res = await fetchWithAuth("/me/month-confirm", {
+	            method: "POST",
+	            headers: {"Content-Type": "application/json"},
+	            body: JSON.stringify({ month: previousMonthState.month }),
+	          });
+	          if (!res) return;
+
+	          const data = await res.json();
+	          if (data.error) {
+	            setStatus(data.error, "error");
+	            if (confirmBtn) confirmBtn.disabled = false;
+	            return;
+	          }
+
+	          await loadPreviousMonthSection();
+	          setStatus("先月分の確認を保存しました。", "ok");
+	        } catch (e) {
+	          setStatus("通信エラーが発生しました。", "error");
+	          if (confirmBtn) confirmBtn.disabled = false;
+	        }
+	      }
+
+	      async function loadLogs() {
         setStatus("ログを取得中...");
         try {
           const res = await fetchWithAuth(buildUrl("/today-logs"));
@@ -385,13 +605,16 @@
         document.getElementById("today-label").innerText = label;
       }
 
-      (async () => {
-        await bootstrapAuth();
-        applyLoginState();
-        updateTodayLabel();
-        loadLogs();
-        loadCurrentState();        
-      })();
+	      (async () => {
+	        await bootstrapAuth();
+	        applyLoginState();
+	        updateTodayLabel();
+	        loadLogs();
+	        loadCurrentState();
+	        loadPreviousMonthSection();
+	      })();
+
+      document.getElementById("save-today-note-btn")?.addEventListener("click", saveTodayNote);
 
     
 async function forceLogout(msg="セッションが切れました。再ログインしてください。") {

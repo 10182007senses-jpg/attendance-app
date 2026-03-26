@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     create_engine,
+    inspect,
     String,
     Integer,
     DateTime,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     Date,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.engine import Engine
@@ -71,11 +73,13 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    required_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    required_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=160)
     max_work_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     logs: Mapped[list["AttendanceLog"]] = relationship(back_populates="user")
     workdays: Mapped[list["Workday"]] = relationship(back_populates="user")
+    monthly_requirements: Mapped[list["UserMonthlyRequirement"]] = relationship(back_populates="user")
+    monthly_confirmations: Mapped[list["MonthlyConfirmation"]] = relationship(back_populates="user")
 
 
 class AttendanceLog(Base):
@@ -103,10 +107,42 @@ class Workday(Base):
     date: Mapped[date] = mapped_column(Date, index=True)  # type: ignore
 
     status: Mapped[str] = mapped_column(String(20), default="open")
+    employee_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst_naive, onupdate=now_jst_naive)
 
     user: Mapped["User"] = relationship(back_populates="workdays")
+
+
+class UserMonthlyRequirement(Base):
+    __tablename__ = "user_monthly_requirements"
+    __table_args__ = (UniqueConstraint("user_id", "year", "month", name="uq_user_monthly_requirements_user_year_month"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    month: Mapped[int] = mapped_column(Integer, index=True)
+    required_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst_naive, onupdate=now_jst_naive)
+
+    user: Mapped["User"] = relationship(back_populates="monthly_requirements")
+
+
+class MonthlyConfirmation(Base):
+    __tablename__ = "monthly_confirmations"
+    __table_args__ = (UniqueConstraint("user_id", "year", "month", name="uq_monthly_confirmations_user_year_month"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    month: Mapped[int] = mapped_column(Integer, index=True)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confirmed_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_jst_naive, onupdate=now_jst_naive)
+
+    user: Mapped["User"] = relationship(back_populates="monthly_confirmations")
 
 
 class Session(Base):
@@ -157,3 +193,18 @@ def init_db() -> None:
     """
     eng = init_engine()
     Base.metadata.create_all(bind=eng)
+    inspector = inspect(eng)
+    if inspector.has_table("workdays"):
+        columns = {col["name"] for col in inspector.get_columns("workdays")}
+        if "employee_note" not in columns:
+            with eng.begin() as conn:
+                conn.execute(text("ALTER TABLE workdays ADD COLUMN employee_note VARCHAR(500)"))
+    db = SessionLocal()
+    try:
+        db.query(User).filter(User.required_hours.is_(None)).update(
+            {User.required_hours: 160},
+            synchronize_session=False,
+        )
+        db.commit()
+    finally:
+        db.close()

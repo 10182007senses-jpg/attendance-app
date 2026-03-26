@@ -219,6 +219,30 @@
         font-size: 12px;
         border-radius: 999px;
       }
+      .full-day-add {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 100%;
+        margin-top: 4px;
+      }
+      .full-day-fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        align-items: center;
+        padding: 6px 8px;
+        border: 1px dashed #d6c4a7;
+        border-radius: 10px;
+        background: #fffdf7;
+      }
+      .full-day-fields label {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
       .action-toggle {
         background: none;
         border: none;
@@ -233,6 +257,10 @@
         text-decoration: underline;
         box-shadow: none;
         transform: none;
+      }
+      .monthly-hours-input {
+        width: 100%;
+        min-width: 96px;
       }
       .map-wrap {
         position: relative;
@@ -388,22 +416,29 @@
             </select>
           </div>
           <div class="panel">
-            <p class="panel-title">ユーザー別 勤務条件設定</p>
+            <div class="detail-panel-header">
+              <p class="panel-title" id="monthly-hours-title">勤務条件設定</p>
+              <div class="detail-panel-actions">
+                <button class="secondary detail-toggle" id="monthly-hours-toggle-btn" type="button">折りたたむ</button>
+              </div>
+            </div>
 
-            <div class="field-row">
-              <div>
-                <label class="login-label">所定労働時間（月・時間）</label>
-                <input id="required-hours-input" type="number" min="0" step="0.5" placeholder="例：160">
+            <div id="monthly-hours-content">
+              <div class="table-wrap">
+                <table class="table-compact" id="monthly-hours-table">
+                  <thead>
+                    <tr>
+                      <th>月</th>
+                      <th>所定労働時間</th>
+                    </tr>
+                  </thead>
+                  <tbody id="monthly-hours-body"></tbody>
+                </table>
               </div>
 
-              <div>
-                <label class="login-label">最大出勤日（月）</label>
-                <input id="max-work-days-input" type="number" min="0" step="1" placeholder="例：20">
-              </div>
-
-              <div class="admin-actions">
-                <button class="secondary" id="load-settings-btn">読み込み</button>
-                <button class="primary" id="save-settings-btn">保存</button>
+              <div class="admin-actions" style="margin-top: 12px;">
+                <button class="secondary" id="load-monthly-hours">読み込み</button>
+                <button class="primary" id="save-monthly-hours">一括保存</button>
               </div>
             </div>
 
@@ -546,8 +581,10 @@
       const expandedActionRows = new Map();
       let lastDetailData = null;
       let editingLogId = null;
-      let isDetailExpanded = true;
-      let isUserPanelExpanded = true;
+      let addingFullDayDate = null;
+      let isDetailExpanded = false;
+      let isMonthlyHoursExpanded = false;
+      let isUserPanelExpanded = false;
 
       function setMapMessage(msg) {
         const msgEl = document.getElementById("map-msg");
@@ -754,58 +791,111 @@
         return url.pathname + url.search;
       }
 
-      async function loadUserSettings() {
-        const user = document.getElementById("user-select").value;
-        if (!user) {
+      function getSelectedUserId() {
+        const select = document.getElementById("user-select");
+        return select.options[select.selectedIndex]?.dataset.userId || "";
+      }
+
+      function getSelectedYear() {
+        const month = document.getElementById("month-input").value;
+        return month ? month.split("-")[0] : "";
+      }
+
+      function updateMonthlyHoursTitle() {
+        const year = getSelectedYear();
+        document.getElementById("monthly-hours-title").innerText = year
+          ? `勤務条件設定（${year}年）`
+          : "勤務条件設定";
+      }
+
+      function renderMonthlyHoursTable(data = {}) {
+        const tbody = document.getElementById("monthly-hours-body");
+        tbody.innerHTML = "";
+        for (let m = 1; m <= 12; m++) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${m}月</td>
+            <td><input class="monthly-hours-input" id="month-${m}" type="number" min="0" step="0.5" value="${data[m] ?? data[String(m)] ?? ""}"></td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+
+      async function loadMonthlyHours() {
+        const userId = getSelectedUserId();
+        const year = getSelectedYear();
+        updateMonthlyHoursTitle();
+        if (!userId) {
           setSettingsStatus("ユーザーを選択してください", "error");
+          return;
+        }
+        if (!year) {
+          setSettingsStatus("対象月を選択してください", "error");
           return;
         }
 
         setSettingsStatus("設定を取得中...");
-        const res = await fetchWithAuth(buildUrl("/admin/user-settings", {user}));
-        if (!res) return;
-
-        const data = await res.json();
-        if (data.error) {
-          setSettingsStatus(data.error, "error");
-          return;
-        }
-
-        document.getElementById("required-hours-input").value = data.required_hours ?? "";
-        document.getElementById("max-work-days-input").value = data.max_work_days ?? "";
-
-        setSettingsStatus("設定を読み込みました", "ok");
-      }
-
-      async function saveUserSettings() {
-        const user = document.getElementById("user-select").value;
-        if (!user) {
-          setSettingsStatus("ユーザーを選択してください", "error")
-        }
-
-        const requiredHours = document.getElementById("required-hours-input").value;
-        const maxWorkDays = document.getElementById("max-work-days-input").value;
-
-        setSettingsStatus("保存中...");
-        const res = await fetchWithAuth("/admin/user-settings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user,
-            required_hours: requiredHours === "" ? null : Number(requiredHours),
-            max_work_days: maxWorkDays === "" ? null : Number(maxWorkDays),
-          }),
-        });
-
+        const res = await fetchWithAuth(buildUrl("/admin/user-monthly-hours", { user_id: userId, year }));
         if (!res) return;
 
         const data = await res.json();
         if (!data.ok) {
-          setSettingsStatus(data.error || "保存に失敗しました", "error");
+          setSettingsStatus(data.error || "取得に失敗しました", "error");
           return;
         }
 
-        setSettingsStatus("設定を保存しました", "ok")
+        renderMonthlyHoursTable(data.data || {});
+        setSettingsStatus("設定を読み込みました", "ok");
+      }
+
+      async function saveMonthlyHours() {
+        const userId = getSelectedUserId();
+        const year = getSelectedYear();
+        updateMonthlyHoursTitle();
+        if (!userId) {
+          setSettingsStatus("ユーザーを選択してください", "error");
+          return;
+        }
+        if (!year) {
+          setSettingsStatus("対象月を選択してください", "error");
+          return;
+        }
+
+        const data = {};
+        for (let m = 1; m <= 12; m++) {
+          data[String(m)] = parseFloat(document.getElementById(`month-${m}`).value) || 0;
+        }
+
+        setSettingsStatus("保存中...");
+        const res = await fetchWithAuth("/admin/user-monthly-hours", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: Number(userId),
+            year: Number(year),
+            data,
+          }),
+        });
+        if (!res) return;
+
+        const result = await res.json();
+        if (!result.ok) {
+          setSettingsStatus(result.error || "保存に失敗しました", "error");
+          return;
+        }
+
+        renderMonthlyHoursTable(result.data || data);
+        setSettingsStatus("設定を保存しました", "ok");
+      }
+
+      function handleMonthlyHoursContextChange() {
+        updateMonthlyHoursTitle();
+        if (getSelectedUserId() && getSelectedYear()) {
+          loadMonthlyHours();
+          return;
+        }
+        renderMonthlyHoursTable();
+        setSettingsStatus("");
       }
 
       function setSettingsStatus(text, type = "info") {
@@ -815,8 +905,10 @@
         el.innerText = text;
       }
 
-      document.getElementById("load-settings-btn").addEventListener("click", loadUserSettings);
-      document.getElementById("save-settings-btn").addEventListener("click", saveUserSettings);
+      document.getElementById("load-monthly-hours").addEventListener("click", loadMonthlyHours);
+      document.getElementById("save-monthly-hours").addEventListener("click", saveMonthlyHours);
+      renderMonthlyHoursTable();
+      updateMonthlyHoursTitle();
 
       function renderSummary(rows) {
         const table = document.getElementById("summary-table");
@@ -847,6 +939,9 @@
           const opt = document.createElement("option");
           opt.value = row.user;
           opt.textContent = row.user;
+          if (row.user_id != null) {
+            opt.dataset.userId = row.user_id;
+          }
           select.appendChild(opt);
         });
         if (current) {
@@ -886,6 +981,54 @@
 
       function toTimeInputValue(value) {
         return String(value || "").slice(0, 5);
+      }
+
+      function buildEmptyDetail(date) {
+        return {
+          date,
+          ok: false,
+          error: null,
+          start: null,
+          end: null,
+          net: "-",
+          action: [],
+        };
+      }
+
+      function buildCalendarDetails(month, details) {
+        if (!month) return details || [];
+        const [year, mon] = month.split("-").map(Number);
+        if (!year || !mon) return details || [];
+        const totalDays = new Date(year, mon, 0).getDate();
+        const byDate = new Map((details || []).map((day) => [day.date, day]));
+        const rows = [];
+        for (let day = 1; day <= totalDays; day += 1) {
+          const date = `${year}-${String(mon).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          rows.push(byDate.get(date) || buildEmptyDetail(date));
+        }
+        return rows;
+      }
+
+      function renderFullDayAddControls(date, userId) {
+        if (!userId) return "";
+        const isAdding = addingFullDayDate === date;
+        if (!isAdding) {
+          return `
+            <div class="full-day-add">
+              <button class="mini-btn secondary add-full-day-btn" data-action="start-full-day" data-date="${date}" data-user-id="${userId}">1日分追加</button>
+            </div>
+          `;
+        }
+        return `
+          <div class="full-day-add">
+            <div class="full-day-fields">
+              <label>入室 <input class="inline-time" type="time" data-role="clock-in-input" value="09:00" /></label>
+              <label>退室 <input class="inline-time" type="time" data-role="clock-out-input" value="18:00" /></label>
+              <button class="mini-btn" data-action="save-full-day" data-date="${date}" data-user-id="${userId}">保存</button>
+              <button class="mini-btn secondary" data-action="cancel-full-day">キャンセル</button>
+            </div>
+          </div>
+        `;
       }
 
       function renderActionList(actions, date) {
@@ -943,12 +1086,16 @@
         
         let okCount = 0;
         let ngCount = 0;
+        let daysWithLogs = 0;
 
         data.details.forEach(day => {
-          if (day.ok) {
-            okCount += 1;
-          } else {
-            ngCount += 1;
+          if ((day.action || []).length > 0) {
+            daysWithLogs += 1;
+            if (day.ok) {
+              okCount += 1;
+            } else {
+              ngCount += 1;
+            }
           }
           const key = day.date;
           const fullActions = formatActions(day.action);
@@ -968,6 +1115,7 @@
             <td>
               <div class="action-cell">
                 <div class="action-text">${displayActions}</div>
+                ${renderFullDayAddControls(key, data.user_id)}
                 ${showToggle ? `<button class="action-toggle" data-action="toggle-action" data-date="${key}">${toggleLabel}</button>` : ""}
               </div>
             </td>
@@ -976,7 +1124,7 @@
         });
 
         if (summaryEl) {
-          summaryEl.innerText = `全${data.details.length}日（OK:${okCount} / 不整合:${ngCount}）`;
+          summaryEl.innerText = `全${data.details.length}日（打刻あり:${daysWithLogs} / OK:${okCount} / 不整合:${ngCount}）`;
         }
       }
 
@@ -1003,11 +1151,15 @@
         }
         expandedActionRows.clear();
         editingLogId = null;
-        lastDetailData = data;
-        isDetailExpanded = true;
+        addingFullDayDate = null;
+        lastDetailData = {
+          ...data,
+          details: buildCalendarDetails(month, data.details || []),
+        };
+        isDetailExpanded = false;
         updateDetailPanelState();
         document.getElementById("detail-header").innerText = `${data.user} / ${data.month}`;
-        renderDetail(data);
+        renderDetail(lastDetailData);
         setStatus("詳細を更新しました", "ok");
       }
 
@@ -1026,6 +1178,29 @@
         }
         alert("更新しました");
         editingLogId = null;
+        await loadUserDetail();
+        return true;
+      }
+
+      async function addFullDayLog(userId, date, clockIn, clockOut) {
+        const res = await fetchWithAuth("/admin/logs/full-day", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: Number(userId),
+            date,
+            clock_in: clockIn,
+            clock_out: clockOut,
+          }),
+        });
+        if (!res) return false;
+        const data = await res.json();
+        if (!res.ok || data.status !== "ok") {
+          alert(data.detail || data.error || "追加に失敗しました");
+          return false;
+        }
+        alert("追加しました");
+        addingFullDayDate = null;
         await loadUserDetail();
         return true;
       }
@@ -1129,6 +1304,17 @@
         }
       }
 
+      function updateMonthlyHoursPanelState() {
+        const content = document.getElementById("monthly-hours-content");
+        const toggleBtn = document.getElementById("monthly-hours-toggle-btn");
+        if (content) {
+          content.style.display = isMonthlyHoursExpanded ? "block" : "none";
+        }
+        if (toggleBtn) {
+          toggleBtn.innerText = isMonthlyHoursExpanded ? "折りたたむ" : "展開";
+        }
+      }
+
       function updateUserPanelState() {
         const content = document.getElementById("user-panel-content");
         const toggleBtn = document.getElementById("user-toggle-btn");
@@ -1145,6 +1331,11 @@
         updateDetailPanelState();
       });
 
+      document.getElementById("monthly-hours-toggle-btn").addEventListener("click", () => {
+        isMonthlyHoursExpanded = !isMonthlyHoursExpanded;
+        updateMonthlyHoursPanelState();
+      });
+
       document.getElementById("user-toggle-btn").addEventListener("click", () => {
         isUserPanelExpanded = !isUserPanelExpanded;
         updateUserPanelState();
@@ -1152,7 +1343,8 @@
 
       document.getElementById("detail-reset-btn").addEventListener("click", () => {
         expandedActionRows.clear();
-        isDetailExpanded = true;
+        addingFullDayDate = null;
+        isDetailExpanded = false;
         updateDetailPanelState();
         if (lastDetailData) {
           renderDetail(lastDetailData);
@@ -1178,7 +1370,25 @@
           return;
         }
 
+        if (target.dataset.action === "start-full-day") {
+          addingFullDayDate = target.dataset.date || null;
+          editingLogId = null;
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
+        if (target.dataset.action === "cancel-full-day") {
+          addingFullDayDate = null;
+          if (lastDetailData) {
+            renderDetail(lastDetailData);
+          }
+          return;
+        }
+
         if (target.dataset.action === "edit-log") {
+          addingFullDayDate = null;
           editingLogId = Number(target.dataset.logId);
           if (lastDetailData) {
             renderDetail(lastDetailData);
@@ -1205,6 +1415,26 @@
             return;
           }
           updateLog(logId, date, time);
+          return;
+        }
+
+        if (target.dataset.action === "save-full-day") {
+          const userId = Number(target.dataset.userId);
+          const date = target.dataset.date;
+          const wrap = target.closest(".full-day-add");
+          const clockInInput = wrap ? wrap.querySelector("input[data-role='clock-in-input']") : null;
+          const clockOutInput = wrap ? wrap.querySelector("input[data-role='clock-out-input']") : null;
+          const clockIn = clockInInput ? clockInInput.value : "";
+          const clockOut = clockOutInput ? clockOutInput.value : "";
+          if (!date || !clockIn || !clockOut) {
+            alert("入室時刻と退室時刻を入力してください");
+            return;
+          }
+          if (clockIn >= clockOut) {
+            alert("入室時刻は退室時刻より前にしてください");
+            return;
+          }
+          addFullDayLog(userId, date, clockIn, clockOut);
         }
       });
       
@@ -1243,7 +1473,10 @@
       document.getElementById("csv-btn").addEventListener("click", downloadCsv);
       document.getElementById("refresh-btn").addEventListener("click", loadSummary);
       document.getElementById("detail-btn").addEventListener("click", loadUserDetail);
-      document.getElementById("user-select").addEventListener("change", loadUserSettings);
+      document.getElementById("user-select").addEventListener("change", handleMonthlyHoursContextChange);
+      document.getElementById("month-input").addEventListener("change", handleMonthlyHoursContextChange);
+      updateDetailPanelState();
+      updateMonthlyHoursPanelState();
 
       async function ensureAdminSession() {
         if (!isLoggedIn()) return false;

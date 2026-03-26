@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, init_engine, Base, engine, now_jst_naive
+from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, UserMonthlyRequirement, MonthlyConfirmation, init_engine, Base, engine, now_jst_naive
 from security import verify_pin, hash_pin
 from seed_users import main as seed_main
 from seed_users import seed_users
@@ -37,6 +37,7 @@ STATE_IN_ROOM = "在室中"
 STATE_UNKNOWN = "不明"
 STATE_VALUES = {STATE_NOT_IN, STATE_IN_ROOM, STATE_UNKNOWN}
 ROUND_MINUTES = 30
+DEFAULT_REQUIRED_HOURS = 160
 
 STATIC_DIR = "static"
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
@@ -135,7 +136,8 @@ def build_user_month_xlsx(
     month: str,
     user: str,
     scheduled_minutes: int,
-    max_workdays: int,
+    confirmed_name: str | None = None,
+    confirmed_at: datetime | None = None,
     details: list[dict],
     raw_logs: list[dict],
 ) -> bytes:
@@ -171,21 +173,17 @@ def build_user_month_xlsx(
   ws["F3"] = user
   ws["A4"] = "所定労働時間"
   ws["C4"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
-  ws["E4"] = "最大出勤日"
-  ws["F4"] = str(max_workdays)
   ws.merge_cells("C3:D3")
   ws.merge_cells("C4:D4")
   ws.merge_cells("F3:G3")
-  ws.merge_cells("F4:G4")
   _style_range(ws, "A3:G4", bold=False, fill=True, center=False)
   _style_range(ws, "A3:A4", bold=True, fill=False, center=False)
-  _style_range(ws, "E3:E4", bold=True, fill=False, center=False)
+  _style_range(ws, "E3:E3", bold=True, fill=False, center=False)
   _set_outer_border(ws, "A3:G4")
   label_align = Alignment(horizontal="left", vertical="center", wrap_text=False)
   ws["A3"].alignment = label_align
   ws["A4"].alignment = label_align
   ws["E3"].alignment = label_align
-  ws["E4"].alignment = label_align
   ws.row_dimensions[3].height = 20
   ws.row_dimensions[4].height = 20
 
@@ -217,7 +215,8 @@ def build_user_month_xlsx(
     raw_out = out_times[-1] if out_times else ""
 
     ok = bool(d.get("ok"))
-    err = d.get("error") or ""
+    err = d.get("system_note") or d.get("error") or ""
+    remark = d.get("remark") or merge_day_notes(d.get("employee_note"), err)
     if actions:
       actual_days += 1
     if not ok:
@@ -238,11 +237,11 @@ def build_user_month_xlsx(
     ws.cell(row=row, column=4, value=(d.get("start") or ""))
     ws.cell(row=row, column=5, value=(d.get("end") or ""))
     ws.cell(row=row, column=6, value=(d.get("net") or ""))
-    ws.cell(row=row, column=7, value=(err if not ok else ""))
+    ws.cell(row=row, column=7, value=remark)
     
     _style_range(ws, f"A{row}:G{row}", center=False)
     ws.row_dimensions[row].height = 18
-    note = str(err) if err else ""
+    note = str(remark) if remark else ""
     note_len = len(note)
     ws[f"G{row}"].alignment = Alignment(vertical="top", wrap_text=True, shrink_to_fit=(note_len > 80))
     if note_len >= 20:
@@ -270,25 +269,23 @@ def build_user_month_xlsx(
   ws[f"D{sum_row+3}"] = f"{total_net_min//60}時間{total_net_min%60}分"
   ws[f"A{sum_row+4}"] = "所定労働時間(月)"
   ws[f"D{sum_row+4}"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
-  ws[f"A{sum_row+5}"] = "最大出勤日(上限)"
-  ws[f"D{sum_row+5}"] = max_workdays
-  for r in range(sum_row + 1, sum_row + 6):
+  for r in range(sum_row + 1, sum_row + 5):
     ws.merge_cells(f"A{r}:C{r}")
-  _style_range(ws, f"A{sum_row+1}:D{sum_row+5}", bold=False, fill=False, center=False)
-  for r in range(sum_row + 1, sum_row + 6):
+  _style_range(ws, f"A{sum_row+1}:D{sum_row+4}", bold=False, fill=False, center=False)
+  for r in range(sum_row + 1, sum_row + 5):
     ws[f"A{r}"].alignment = label_align
     ws[f"D{r}"].alignment = Alignment(horizontal="right", vertical="center")
-  _set_outer_border(ws, f"A{sum_row}:D{sum_row+5}")
+  _set_outer_border(ws, f"A{sum_row}:D{sum_row+4}")
 
-  sign_row = sum_row + 7
+  sign_row = sum_row + 6
   ws.merge_cells(f"A{sign_row}:C{sign_row}")
   ws.merge_cells(f"D{sign_row}:E{sign_row}")
   ws.merge_cells(f"A{sign_row+2}:C{sign_row+2}")
   ws.merge_cells(f"D{sign_row+2}:E{sign_row+2}")
   ws[f"A{sign_row}"] = "本人署名："
-  ws[f"D{sign_row}"] = " "
+  ws[f"D{sign_row}"] = confirmed_name or " "
   ws[f"F{sign_row}"] = "日付："
-  ws[f"G{sign_row}"] = "____/____/____"
+  ws[f"G{sign_row}"] = confirmed_at.strftime("%Y/%m/%d") if confirmed_at else "____/____/____"
 
   ws[f"A{sign_row+2}"] = "管理者確認："
   ws[f"D{sign_row+2}"] = " "
@@ -403,6 +400,54 @@ def month_range(month: str) -> tuple[datetime, datetime]:
     end = datetime(year, mon+1, 1)
   return start, end
 
+def combine_jst_naive_datetime(day_value: str, time_value: str) -> datetime:
+  try:
+    return datetime.strptime(f"{day_value} {time_value}", "%Y-%m-%d %H:%M")
+  except ValueError as exc:
+    raise HTTPException(
+      status_code=status.HTTP_400_BAD_REQUEST,
+      detail="日付または時刻の形式が不正です",
+    ) from exc
+
+def parse_month_str(month_str: str) -> tuple[int, int]:
+  try:
+    year_str, month_part = month_str.split("-", 1)
+    return int(year_str), int(month_part)
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail="month は YYYY-MM 形式で指定してください") from exc
+
+def format_month_str(year: int, month: int) -> str:
+  return f"{year}-{str(month).zfill(2)}"
+
+def get_previous_month_str(base_dt: datetime | None = None) -> str:
+  now = base_dt or now_jst_naive()
+  first_day_this_month = datetime(now.year, now.month, 1)
+  previous_month_last_day = first_day_this_month - timedelta(days=1)
+  return format_month_str(previous_month_last_day.year, previous_month_last_day.month)
+
+def get_month_confirmation(db: Session, user_id: int, month_str: str) -> MonthlyConfirmation | None:
+  year, month = parse_month_str(month_str)
+  return (
+    db.query(MonthlyConfirmation)
+    .filter(
+      MonthlyConfirmation.user_id == user_id,
+      MonthlyConfirmation.year == year,
+      MonthlyConfirmation.month == month,
+    )
+    .one_or_none()
+  )
+
+def invalidate_month_confirmation(db: Session, user_id: int, target_dt: datetime) -> None:
+  (
+    db.query(MonthlyConfirmation)
+    .filter(
+      MonthlyConfirmation.user_id == user_id,
+      MonthlyConfirmation.year == target_dt.year,
+      MonthlyConfirmation.month == target_dt.month,
+    )
+    .delete(synchronize_session=False)
+  )
+
 def _today_range() -> tuple[datetime, datetime]:
   today = now_jst_naive().date()
   start = datetime.combine(today, time.min)
@@ -468,7 +513,11 @@ def recalc_workday(db: Session, user_id: int, d: date) -> dict:
 
   if not logs:
     if wd is not None:
-      db.delete(wd)
+      if wd.employee_note:
+        wd.status = "open"
+        wd.updated_at = now_jst_naive()
+      else:
+        db.delete(wd)
       db.commit()
     return result
 
@@ -652,8 +701,9 @@ def calc_day_from_logs(day_logs: list[AttendanceLog]) -> dict:
     gross_sec = int((end-start).total_seconds())
     if gross_sec < 0:
       gross_sec = 0
-    net_sec = gross_sec
-    return {"ok": True, "gross_sec": gross_sec, "break_sec": 0, "net_sec": net_sec, "error": None, "start": start, "end": end}
+    break_sec = 3600 if gross_sec >= 6 * 3600 else 0
+    net_sec = max(gross_sec - break_sec, 0)
+    return {"ok": True, "gross_sec": gross_sec, "break_sec": break_sec, "net_sec": net_sec, "error": None, "start": start, "end": end}
 
 def sec_to_hm(sec: int) ->str:
   minutes = sec // 60
@@ -759,10 +809,10 @@ class LoginRequest(BaseModel):
   user: str
   pin:str
 
-class UserSettingsRequest(BaseModel):
-  user: str
-  required_hours: float | None = None
-  max_work_days: int | None = None
+class AdminMonthlyHoursSaveRequest(BaseModel):
+  user_id: int
+  year: int
+  data: dict[str, float]
 
 class AdminLogUpdateRequest(BaseModel):
   ts: datetime
@@ -771,6 +821,18 @@ class AdminLogCreateRequest(BaseModel):
   user_id: int
   type: str
   ts: datetime
+
+class AdminFullDayLogCreateRequest(BaseModel):
+  user_id: int
+  date: str
+  clock_in: str
+  clock_out: str
+
+class MonthConfirmRequest(BaseModel):
+  month: str
+
+class TodayNoteRequest(BaseModel):
+  note: str
 
 class AdminCreateUserRequest(BaseModel):
   name: str
@@ -823,14 +885,61 @@ def get_month_logs_for_user(db: Session, user_id: int, month: str) -> list[Atten
     .all()
   )
 
+def merge_day_notes(employee_note: str | None, system_note: str | None) -> str:
+  notes = []
+  if employee_note:
+    notes.append(employee_note)
+  if system_note:
+    notes.append(system_note)
+  return "\n".join(notes)
+
+def build_month_detail_rows(db: Session, user_id: int, month: str, logs: list[AttendanceLog]) -> list[dict]:
+  day_map = group_logs_by_workday_start(logs)
+  start, end = month_range(month)
+  workdays = (
+    db.query(Workday)
+    .filter(
+      Workday.user_id == user_id,
+      Workday.date >= start.date(),
+      Workday.date < end.date(),
+    )
+    .all()
+  )
+  workday_map = {wd.date: wd for wd in workdays}
+  details = []
+  all_dates = sorted(set(day_map.keys()) | set(workday_map.keys()))
+  for d in all_dates:
+    day_logs = day_map.get(d, [])
+    wd = workday_map.get(d)
+    employee_note = wd.employee_note if wd else None
+    if day_logs:
+      r = calc_day_from_logs(day_logs)
+    else:
+      r = {"ok": True, "error": None, "start": None, "end": None, "gross_sec": 0, "net_sec": 0}
+    remark = merge_day_notes(employee_note, r["error"])
+    details.append({
+      "date": str(d),
+      "ok": r["ok"],
+      "error": r["error"],
+      "system_note": r["error"],
+      "employee_note": employee_note,
+      "remark": remark,
+      "start": r["start"].strftime("%H:%M:%S") if r["start"] else None,
+      "end": r["end"].strftime("%H:%M:%S") if r["end"] else None,
+      "gross": sec_to_hm(r["gross_sec"]) if day_logs else "",
+      "net": sec_to_hm(r["net_sec"]) if day_logs else "",
+      "action": [
+        {"id": l.id, "action": l.action, "time": l.ts.strftime("%H:%M:%S"), "lat": l.lat, "lon": l.lon}
+        for l in sorted(day_logs, key=lambda x: x.ts)
+      ],
+    })
+  return details
+
 def calc_month_summary_from_logs(
     logs: list[AttendanceLog],
     month: str,
-    info: dict
+    required_hours: float
 ):
-  MONTH_REQUIRED_HOURS = info["required_hours"]
-  MONTH_MAX_WORK_DAYS = info["max_work_days"]
-
   day_map = group_logs_by_workday_start(logs)
 
   worked_days = 0
@@ -851,44 +960,51 @@ def calc_month_summary_from_logs(
     else:
       inconsistent_days += 1
 
-  required_sec = int(MONTH_REQUIRED_HOURS * 3600)
+  required_sec = int(required_hours * 3600)
   remaining_sec = max(required_sec - total_net_sec, 0)
-  remaining_days = max(MONTH_MAX_WORK_DAYS - worked_days, 0)
 
   return {
     "month": month,
-    "required_hours": MONTH_REQUIRED_HOURS,
-    "max_work_days": MONTH_MAX_WORK_DAYS,
+    "required_hours": required_hours,
     "worked_days": worked_days,
     "ok_days": ok_days,
     "inconsistent_days": inconsistent_days,
     "worked_time": sec_to_hm(total_net_sec),
     "remaining_time": sec_to_hm(remaining_sec),
     "remaining_minutes": remaining_sec // 60,
-    "remaining_days": remaining_days
   }
 
-def get_user_info(db: Session, user_id: int):
-  MONTH_REQUIRED_HOURS = 160
-  MONTH_MAX_WORK_DAYS = 20
+def get_required_hours(db: Session, user_id: int, month_str: str) -> float:
+  year, month = parse_month_str(month_str)
+
+  req = db.query(UserMonthlyRequirement).filter(
+    UserMonthlyRequirement.user_id == user_id,
+    UserMonthlyRequirement.year == year,
+    UserMonthlyRequirement.month == month,
+  ).one_or_none()
+  if req is not None:
+    return req.required_hours
+
   u = db.query(User).filter(
     User.id == user_id,
     User.is_active == True 
     ).one_or_none()
-  
-  if not u:
-    return {
-      "required_hours": MONTH_REQUIRED_HOURS,
-      "max_work_days": MONTH_MAX_WORK_DAYS
-    }
-  if u.required_hours is not None:
-    MONTH_REQUIRED_HOURS = u.required_hours
-  if u.max_work_days is not None:
-    MONTH_MAX_WORK_DAYS = u.max_work_days
-  return {
-    "required_hours": MONTH_REQUIRED_HOURS,
-    "max_work_days": MONTH_MAX_WORK_DAYS
-  }
+  if u and u.required_hours is not None:
+    return u.required_hours
+  return DEFAULT_REQUIRED_HOURS
+
+def get_user_monthly_hours_map(db: Session, user_id: int, year: int) -> dict[str, float]:
+  u = db.query(User).filter(User.id == user_id, User.is_active == True).one_or_none()
+  fallback = u.required_hours if u and u.required_hours is not None else DEFAULT_REQUIRED_HOURS
+  data = {str(month): fallback for month in range(1, 13)}
+  rows = (
+    db.query(UserMonthlyRequirement)
+    .filter(UserMonthlyRequirement.user_id == user_id, UserMonthlyRequirement.year == year)
+    .all()
+  )
+  for row in rows:
+    data[str(row.month)] = row.required_hours
+  return data
 
 @app.post("/login")
 def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
@@ -944,8 +1060,11 @@ def admin_update_log(
   if log is None:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="打刻が見つかりません")
 
+  old_ts = log.ts
   old_date = log.ts.date()
   log.ts = body.ts
+  invalidate_month_confirmation(db, log.user_id, old_ts)
+  invalidate_month_confirmation(db, log.user_id, body.ts)
   db.commit()
 
   affected_dates = {old_date, body.ts.date()}
@@ -971,11 +1090,65 @@ def admin_create_log(
     source="admin",
   )
   db.add(log)
+  invalidate_month_confirmation(db, body.user_id, body.ts)
   db.commit()
   db.refresh(log)
 
   result = recalc_workday(db, log.user_id, log.ts.date())
   return {"ok": True, "log_id": log.id, "user_id": log.user_id, "ts": log.ts.isoformat(), "result": result}
+
+@app.post("/admin/logs/full-day")
+def admin_create_full_day_logs(
+  body: AdminFullDayLogCreateRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db),
+):
+  user = db.query(User).filter(User.id == body.user_id, User.is_active == True).one_or_none()
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+
+  clock_in_dt = combine_jst_naive_datetime(body.date, body.clock_in)
+  clock_out_dt = combine_jst_naive_datetime(body.date, body.clock_out)
+  if clock_in_dt >= clock_out_dt:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="入室時刻は退室時刻より前にしてください")
+
+  day_start = datetime.combine(clock_in_dt.date(), time.min)
+  day_end = day_start + timedelta(days=1)
+  existing_log = (
+    db.query(AttendanceLog)
+    .filter(
+      AttendanceLog.user_id == body.user_id,
+      AttendanceLog.ts >= day_start,
+      AttendanceLog.ts < day_end,
+    )
+    .first()
+  )
+  if existing_log is not None:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="その日は既存ログがあります。個別編集を使ってください。")
+
+  db.add_all([
+    AttendanceLog(
+      user_id=body.user_id,
+      action=ACTION_IN,
+      ts=clock_in_dt,
+      lat=None,
+      lon=None,
+      source="admin",
+    ),
+    AttendanceLog(
+      user_id=body.user_id,
+      action=ACTION_OUT,
+      ts=clock_out_dt,
+      lat=None,
+      lon=None,
+      source="admin",
+    ),
+  ])
+  invalidate_month_confirmation(db, body.user_id, clock_in_dt)
+  db.commit()
+
+  recalc_workday(db, body.user_id, clock_in_dt.date())
+  return {"status": "ok"}
 
 
 @app.post("/logout")
@@ -1067,6 +1240,36 @@ def work_time(user: str = Depends(get_current_user), db: Session = Depends(get_d
   except Exception:
     return {"error": "勤務時間の計算に失敗しました"}
 
+@app.get("/today-note")
+def today_note(user_row: User | None = Depends(get_current_user_row_from_cookie), db: Session = Depends(get_db)):
+  if user_row is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+
+  today = now_jst_naive().date()
+  wd = (
+    db.query(Workday)
+    .filter(Workday.user_id == user_row.id, Workday.date == today)
+    .one_or_none()
+  )
+  return {"status": "ok", "note": (wd.employee_note or "") if wd else ""}
+
+@app.post("/today-note")
+def save_today_note(
+  body: TodayNoteRequest,
+  user_row: User | None = Depends(get_current_user_row_from_cookie),
+  db: Session = Depends(get_db),
+):
+  if user_row is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+
+  note = body.note[:500]
+  today = now_jst_naive().date()
+  wd = _ensure_workday(db, user_row.id, today)
+  wd.employee_note = note or None
+  wd.updated_at = now_jst_naive()
+  db.commit()
+  return {"status": "ok"}
+
 @app.get("/admin/month-summary")
 def admin_month_summary(month, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
   start, end = month_range(month)
@@ -1130,6 +1333,7 @@ def admin_month_summary(month, admin: User = Depends(require_admin), db: Session
         inconsistent_day += 1
 
     rows.append({
+      "user_id": u.id,
       "user": u.name,
       "work_days_with_logs": work_days,
       "ok_days": ok_days,
@@ -1169,29 +1373,11 @@ def admin_user_detail(
     .all()
   )
 
-  day_map = group_logs_by_workday_start(logs)
-  
-  details = []
-  for d in sorted(day_map.keys()):
-    r = calc_day_from_logs(day_map[d])
-    details.append({
-      "date": str(d),
-      "ok": r["ok"],
-      "error": r["error"],
-      "start": r["start"].strftime("%H:%M:%S") if r["start"] else None,
-      "end": r["end"].strftime("%H:%M:%S") if r["end"] else None,
-      "gross": sec_to_hm(r["gross_sec"]),
-      "net": sec_to_hm(r["net_sec"]),
-      "action": [
-        {"id": l.id, "action":l.action, "time": l.ts.strftime("%H:%M:%S"), "lat": l.lat, "lon": l.lon,}
-        for l in sorted(day_map[d], key=lambda x: x.ts)
-      ],
-    })
-
   return {
     "month": month,
+    "user_id": u.id,
     "user": u.name,
-    "details": details,
+    "details": build_month_detail_rows(db, u.id, month, logs),
   }
 
 @app.get("/admin/user-detail.csv")
@@ -1362,57 +1548,66 @@ def admin_raw_logs_csv(
     headers={"Content-Disposition": f'attachment; filename="{filename_ascii}"; filename*=UTF-8\'\'{filename_star}'},
   )
 
-@app.get("/admin/user-settings")
-def get_user_settings(
-  user: str,
+@app.get("/admin/user-monthly-hours")
+def get_user_monthly_hours(
+  user_id: int,
+  year: int,
   admin: User = Depends(require_admin),
   db: Session = Depends(get_db)
 ):
-  u = db.query(User).filter(
-    User.name == user,
-    User.is_active == True
-  ).one_or_none()
-
+  u = db.query(User).filter(User.id == user_id, User.is_active == True).one_or_none()
   if not u:
     raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-  
+
   return {
-    "user": u.name,
-    "required_hours": u.required_hours,
-    "max_work_days": u.max_work_days
+    "ok": True,
+    "status": "ok",
+    "user_id": u.id,
+    "year": year,
+    "data": get_user_monthly_hours_map(db, u.id, year),
   }
 
-@app.post("/admin/user-settings")
-def update_user_settings(
-  req: UserSettingsRequest,
+@app.post("/admin/user-monthly-hours")
+def save_user_monthly_hours(
+  req: AdminMonthlyHoursSaveRequest,
   admin: User = Depends(require_admin),
   db: Session = Depends(get_db)
 ):
-  u = db.query(User).filter(
-    User.name == req.user,
-    User.is_active == True
-  ).one_or_none()
-
+  u = db.query(User).filter(User.id == req.user_id, User.is_active == True).one_or_none()
   if not u:
     raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-  
-  if req.required_hours is not None:
-    if req.required_hours < 0:
-      raise HTTPException(status_code=400, detail="required_hoursは0以上")
-    u.required_hours = req.required_hours
 
-  if req.max_work_days is not None:
-    if req.max_work_days < 0:
-      raise HTTPException(status_code=400, detail="max_work_daysは0以上")
-    u.max_work_days = req.max_work_days
+  for month in range(1, 13):
+    raw_value = req.data.get(str(month), req.data.get(month))  # type: ignore[arg-type]
+    hours = float(raw_value) if raw_value is not None else 0.0
+    if hours < 0:
+      raise HTTPException(status_code=400, detail="required_hoursは0以上")
+
+    row = db.query(UserMonthlyRequirement).filter(
+      UserMonthlyRequirement.user_id == u.id,
+      UserMonthlyRequirement.year == req.year,
+      UserMonthlyRequirement.month == month,
+    ).one_or_none()
+    if row is None:
+      row = UserMonthlyRequirement(
+        user_id=u.id,
+        year=req.year,
+        month=month,
+        required_hours=hours,
+      )
+      db.add(row)
+    else:
+      row.required_hours = hours
+      row.updated_at = now_jst_naive()
 
   db.commit()
 
   return {
     "ok": True,
-    "user": u.name,
-    "required_hours": u.required_hours,
-    "max_work_days": u.max_work_days
+    "status": "ok",
+    "user_id": u.id,
+    "year": req.year,
+    "data": get_user_monthly_hours_map(db, u.id, req.year),
   }
 
 @app.get("/admin/user-month.xlsx")
@@ -1423,9 +1618,11 @@ def admin_user_month_xlsx(
   db: Session = Depends(get_db)
 ):
   user_id = _get_user_id(db, user)
-  info = get_user_info(db, user_id)
-  MONTH_REQUIRED_MINUTES = info["required_hours"] * 60
-  MONTH_MAX_WORK_DAYS = info["max_work_days"]
+  if user_id is None:
+    raise HTTPException(status_code=404, detail="対象のユーザーが見つかりません")
+  month_required_hours = get_required_hours(db, user_id, month)
+  month_required_minutes = int(month_required_hours * 60)
+  confirmation = get_month_confirmation(db, user_id, month)
 
   detail = admin_user_detail(month, user, admin=admin, db=db)
   if detail.get("error"):
@@ -1462,8 +1659,9 @@ def admin_user_month_xlsx(
   content = build_user_month_xlsx(
     month=month,
     user=user,
-    scheduled_minutes=MONTH_REQUIRED_MINUTES,
-    max_workdays=MONTH_MAX_WORK_DAYS,
+    scheduled_minutes=month_required_minutes,
+    confirmed_name=confirmation.confirmed_name if confirmation else None,
+    confirmed_at=confirmation.confirmed_at if confirmation else None,
     details=detail["details"],
     raw_logs=raw_logs,
   )
@@ -1557,6 +1755,83 @@ def me(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
     raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
   return {"ok": True, "user": u.name, "role": u.role} 
 
+@app.get("/me/previous-month-confirmation")
+def my_previous_month_confirmation(
+  user: str = Depends(get_current_user),
+  db: Session = Depends(get_db),
+):
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+  u = db.query(User).filter(User.name == user, User.is_active == True).one_or_none()
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+
+  month = get_previous_month_str()
+  confirmation = get_month_confirmation(db, u.id, month)
+  if confirmation is None:
+    return {"status": "ok", "month": month, "confirmed": False}
+
+  return {
+    "status": "ok",
+    "month": month,
+    "confirmed": True,
+    "confirmed_at": confirmation.confirmed_at.isoformat(),
+    "confirmed_name": confirmation.confirmed_name,
+  }
+
+@app.get("/me/previous-month-detail")
+def my_previous_month_detail(
+  user: str = Depends(get_current_user),
+  db: Session = Depends(get_db),
+):
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+  u = db.query(User).filter(User.name == user, User.is_active == True).one_or_none()
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+
+  month = get_previous_month_str()
+  logs = get_month_logs_for_user(db, u.id, month)
+  required_hours = get_required_hours(db, u.id, month)
+  summary = calc_month_summary_from_logs(logs, month, required_hours)
+  confirmation = get_month_confirmation(db, u.id, month)
+  return {
+    "status": "ok",
+    "month": month,
+    "summary": summary,
+    "details": build_month_detail_rows(db, u.id, month, logs),
+    "confirmed": confirmation is not None,
+    "confirmed_at": confirmation.confirmed_at.isoformat() if confirmation else None,
+    "confirmed_name": confirmation.confirmed_name if confirmation else None,
+  }
+
+@app.post("/me/month-confirm")
+def my_month_confirm(
+  body: MonthConfirmRequest,
+  user: str = Depends(get_current_user),
+  db: Session = Depends(get_db),
+):
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
+  u = db.query(User).filter(User.name == user, User.is_active == True).one_or_none()
+  if not u:
+    raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+
+  year, month = parse_month_str(body.month)
+  confirmation = get_month_confirmation(db, u.id, body.month)
+  if confirmation is None:
+    confirmation = MonthlyConfirmation(
+      user_id=u.id,
+      year=year,
+      month=month,
+      confirmed_at=now_jst_naive(),
+      confirmed_name=u.name,
+    )
+    db.add(confirmation)
+    db.commit()
+
+  return {"status": "ok"}
+
 @app.get("/me/month-summary")
 def my_month_summary(
   month: str | None = None,
@@ -1573,6 +1848,6 @@ def my_month_summary(
   user_id = _get_user_id(db, user)
   if user_id is None:
     raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-  info = get_user_info(db, user_id)
+  required_hours = get_required_hours(db, user_id, month)
   logs = get_month_logs_for_user(db, user_id, month)
-  return calc_month_summary_from_logs(logs, month, info)
+  return calc_month_summary_from_logs(logs, month, required_hours)

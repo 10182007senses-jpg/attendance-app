@@ -54,6 +54,15 @@
         <button class="accent" onclick="callApi('/clock-out')">退室</button>
       </div>
 
+      <div class="panel" id="today-note-section">
+        <p class="panel-title">本日の備考</p>
+        <textarea id="today-note-input" rows="3" placeholder="本日の備考を入力してください"></textarea>
+        <div class="footer">
+          <button class="secondary" id="save-today-note-btn" type="button" onclick="saveTodayNote()">備考を保存</button>
+          <div id="today-note-status"></div>
+        </div>
+      </div>
+
       <div class="panel">
         <p class="panel-title">操作ステータス</p>
         <div id="status">準備完了</div>
@@ -74,18 +83,6 @@
       </div>
 
       <div class="panel">
-        <p class="panel-title">今月のサマリー</p>
-
-        <div class="result" id="month-summary-result">まだ取得していません</div>
-
-        <div class="footer" style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="secondary" onclick="loadMonthSummary()">今月のサマリーを更新</button>
-        </div>
-
-        <div id="month-summary-detail" style="margin-top:10px; font-size:13px; color:#555;"></div>
-      </div>
-
-      <div class="panel">
         <p class="panel-title">今日のログ</p>
         <table>
           <thead>
@@ -101,8 +98,31 @@
           <button class="secondary" onclick="loadLogs()">ログを更新</button>
         </div>
       </div>
+
+      <div class="panel">
+        <p class="panel-title">今月のサマリー</p>
+
+        <div class="result" id="month-summary-result">まだ取得していません</div>
+
+        <div class="footer" style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="secondary" onclick="loadMonthSummary()">今月のサマリーを更新</button>
+        </div>
+
+        <div id="month-summary-detail" style="margin-top:10px; font-size:13px; color:#555;"></div>
+      </div>
+
+      <div class="panel" id="previous-month-confirm-section">
+        <p class="panel-title">先月の勤務実績</p>
+        <div class="result" id="previous-month-summary">まだ取得していません</div>
+        <div id="previous-month-confirm-status" style="margin-top:10px; font-size:13px; color:#555;"></div>
+        <div id="previous-month-logs" style="margin-top:12px;"></div>
+        <div class="footer" style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="primary" id="confirm-previous-month-btn" onclick="confirmPreviousMonth()">内容を確認しました</button>
+          <button class="secondary" onclick="loadPreviousMonthSection()">先月分を更新</button>
+        </div>
+      </div>
     </div>
 
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=3"></script>
   </body>
 </html>
