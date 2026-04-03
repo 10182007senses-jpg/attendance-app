@@ -725,7 +725,7 @@ def floor_time(dt: datetime, minutes: int = ROUND_MINUTES) -> datetime:
   dt0 = dt.replace(second=0, microsecond=0)
   m = dt0.minute
   if (m % minutes) == 0:
-    return dt0 - timedelta(minutes=minutes)
+    return dt0
   sub = (m % minutes)
   return dt0 - timedelta(minutes=sub)
 
