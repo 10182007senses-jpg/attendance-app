@@ -38,6 +38,9 @@ STATE_UNKNOWN = "不明"
 STATE_VALUES = {STATE_NOT_IN, STATE_IN_ROOM, STATE_UNKNOWN}
 ROUND_MINUTES = 30
 DEFAULT_REQUIRED_HOURS = 160
+BREAK_RULE_STANDARD = "standard"
+BREAK_RULE_ALWAYS_1H = "always_1h"
+BREAK_RULE_VALUES = {BREAK_RULE_STANDARD, BREAK_RULE_ALWAYS_1H}
 
 STATIC_DIR = "static"
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
@@ -508,8 +511,10 @@ def recalc_workday(db: Session, user_id: int, d: date) -> dict:
     .all()
   )
 
+  u = db.query(User).filter(User.id == user_id).one_or_none()
+  break_rule = u.break_rule if u and u.break_rule else BREAK_RULE_STANDARD
   wd = db.query(Workday).filter(Workday.user_id == user_id, Workday.date == d).one_or_none()
-  result = calc_day_from_logs(logs)
+  result = calc_day_from_logs(logs, break_rule)
 
   if not logs:
     if wd is not None:
@@ -648,15 +653,15 @@ def group_logs_by_workday_start(logs: list["AttendanceLog"]) -> dict[date, list[
   return dict(by_day)
 
 def calc_work_time_db(db: Session, user_name: str):
-    user_id = _get_user_id(db, user_name)
-    if user_id is None:
+    u = db.query(User).filter(User.name == user_name, User.is_active == True).one_or_none()
+    if not u:
       return {"error": "ユーザーが見つかりません"}
     
     start_dt, end_dt = _today_range()
     daylogs = (
       db.query(AttendanceLog)
       .filter(
-        AttendanceLog.user_id == user_id,
+        AttendanceLog.user_id == u.id,
         AttendanceLog.ts >= start_dt,
         AttendanceLog.ts < end_dt,
         AttendanceLog.action.in_(ACTIONS),
@@ -665,7 +670,7 @@ def calc_work_time_db(db: Session, user_name: str):
       .all()
     )
   
-    r = calc_day_from_logs(daylogs)
+    r = calc_day_from_logs(daylogs, u.break_rule)
     if not r["ok"]:
       return {"error": r["error"] or "計算できません"}
     
@@ -678,7 +683,7 @@ def calc_work_time_db(db: Session, user_name: str):
       "end": r["end"].strftime("%H:%M"), 
     }
       
-def calc_day_from_logs(day_logs: list[AttendanceLog]) -> dict:
+def calc_day_from_logs(day_logs: list[AttendanceLog], break_rule: str = BREAK_RULE_STANDARD) -> dict:
     if not day_logs:
       return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "ログなし", "start": None, "end": None}
     
@@ -701,7 +706,10 @@ def calc_day_from_logs(day_logs: list[AttendanceLog]) -> dict:
     gross_sec = int((end-start).total_seconds())
     if gross_sec < 0:
       gross_sec = 0
-    break_sec = 3600 if gross_sec >= 6 * 3600 else 0
+    if break_rule == BREAK_RULE_ALWAYS_1H:
+      break_sec = 3600 if gross_sec > 0 else 0
+    else:
+      break_sec = 3600 if gross_sec >= 6 * 3600 else 0
     net_sec = max(gross_sec - break_sec, 0)
     return {"ok": True, "gross_sec": gross_sec, "break_sec": break_sec, "net_sec": net_sec, "error": None, "start": start, "end": end}
 
@@ -844,12 +852,20 @@ class AdminCreateUserRequest(BaseModel):
   name: str
   pin: str
   role: str = "user"
+  break_rule: str = BREAK_RULE_STANDARD
 
 class AdminUpdateUserRequest(BaseModel):
   name: str
   role: str | None = None
   is_active: bool | None = None
   pin: str | None = None
+  break_rule: str | None = None
+
+def normalize_break_rule(break_rule: str | None) -> str:
+  value = (break_rule or BREAK_RULE_STANDARD).strip()
+  if value not in BREAK_RULE_VALUES:
+    raise HTTPException(status_code=400, detail="break_ruleは standard または always_1h")
+  return value
 
 def get_current_user(session_id: str | None = Depends(get_session_id_from_cookie) , db: Session = Depends(get_db)):
   if not session_id:
@@ -900,6 +916,8 @@ def merge_day_notes(employee_note: str | None, system_note: str | None) -> str:
   return "\n".join(notes)
 
 def build_month_detail_rows(db: Session, user_id: int, month: str, logs: list[AttendanceLog]) -> list[dict]:
+  u = db.query(User).filter(User.id == user_id).one_or_none()
+  break_rule = u.break_rule if u and u.break_rule else BREAK_RULE_STANDARD
   day_map = group_logs_by_workday_start(logs)
   start, end = month_range(month)
   workdays = (
@@ -919,7 +937,7 @@ def build_month_detail_rows(db: Session, user_id: int, month: str, logs: list[At
     wd = workday_map.get(d)
     employee_note = wd.employee_note if wd else None
     if day_logs:
-      r = calc_day_from_logs(day_logs)
+      r = calc_day_from_logs(day_logs, break_rule)
     else:
       r = {"ok": True, "error": None, "start": None, "end": None, "gross_sec": 0, "net_sec": 0}
     remark = merge_day_notes(employee_note, r["error"])
@@ -944,7 +962,8 @@ def build_month_detail_rows(db: Session, user_id: int, month: str, logs: list[At
 def calc_month_summary_from_logs(
     logs: list[AttendanceLog],
     month: str,
-    required_hours: float
+    required_hours: float,
+    break_rule: str = BREAK_RULE_STANDARD
 ):
   day_map = group_logs_by_workday_start(logs)
 
@@ -958,7 +977,7 @@ def calc_month_summary_from_logs(
       continue
 
     worked_days += 1
-    r = calc_day_from_logs(day_logs)
+    r = calc_day_from_logs(day_logs, break_rule)
 
     if r["ok"]:
       ok_days += 1
@@ -1390,7 +1409,7 @@ def admin_month_summary(month, admin: User = Depends(require_admin), db: Session
       if wd and wd.status == "open":
         open_days += 1
 
-      r = calc_day_from_logs(day_logs)
+      r = calc_day_from_logs(day_logs, u.break_rule or BREAK_RULE_STANDARD)
       if r["ok"]:
         ok_days += 1
         total_gross += r["gross_sec"]
@@ -1750,7 +1769,7 @@ def admin_list_users(admin: User = Depends(require_admin), db: Session = Depends
   return {
     "ok": True,
     "users": [
-      {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active}
+      {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active, "break_rule": u.break_rule}
       for u in users
     ]
   }
@@ -1760,6 +1779,7 @@ def admin_create_user(req: AdminCreateUserRequest, admin: User = Depends(require
   name = req.name.strip()
   pin = req.pin.strip()
   role = req.role.strip()
+  break_rule = normalize_break_rule(req.break_rule)
 
   if not name:
     raise HTTPException(status_code=400, detail="nameは必須です")
@@ -1776,12 +1796,13 @@ def admin_create_user(req: AdminCreateUserRequest, admin: User = Depends(require
     name=name,
     pin_hash=hash_pin(pin),
     role=role,
-    is_active=True
+    is_active=True,
+    break_rule=break_rule
   )
   db.add(u)
   db.commit()
 
-  return {"ok": True, "user": {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active}}
+  return {"ok": True, "user": {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active, "break_rule": u.break_rule}}
 
 @app.patch("/admin/users")
 def admin_update_user(req: AdminUpdateUserRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -1808,9 +1829,12 @@ def admin_update_user(req: AdminUpdateUserRequest, admin: User = Depends(require
       raise HTTPException(status_code=400, detail="pinが空です")
     u.pin_hash = hash_pin(pin)
 
+  if req.break_rule is not None:
+    u.break_rule = normalize_break_rule(req.break_rule)
+
   db.commit()
 
-  return {"ok": True, "user": {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active}}
+  return {"ok": True, "user": {"id": u.id, "name": u.name, "role": u.role, "is_active": u.is_active, "break_rule": u.break_rule}}
 
 @app.get("/me")
 def me(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1859,7 +1883,7 @@ def my_previous_month_detail(
   month = get_previous_month_str()
   logs = get_month_logs_for_user(db, u.id, month)
   required_hours = get_required_hours(db, u.id, month)
-  summary = calc_month_summary_from_logs(logs, month, required_hours)
+  summary = calc_month_summary_from_logs(logs, month, required_hours, u.break_rule)
   confirmation = get_month_confirmation(db, u.id, month)
   return {
     "status": "ok",
@@ -1916,4 +1940,6 @@ def my_month_summary(
     raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
   required_hours = get_required_hours(db, user_id, month)
   logs = get_month_logs_for_user(db, user_id, month)
-  return calc_month_summary_from_logs(logs, month, required_hours)
+  u = db.query(User).filter(User.id == user_id, User.is_active == True).one_or_none()
+  break_rule = u.break_rule if u and u.break_rule else BREAK_RULE_STANDARD
+  return calc_month_summary_from_logs(logs, month, required_hours, break_rule)

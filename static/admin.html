@@ -484,7 +484,7 @@
               <button class="secondary detail-toggle" id="user-toggle-btn" type="button">折りたたむ</button>
             </div>
           </div>
-          <div class="hint">ユーザー追加 / 無効化 / 権限変更 / PIN再設定</div>
+          <div class="hint">ユーザー追加 / 無効化 / 権限変更 / 休憩ルール変更 / PIN再設定</div>
 
           <div id="user-panel-content">
             <div class="field-row">
@@ -499,8 +499,15 @@
               <div>
                 <label class="login-label">権限</label>
                 <select id="new-user-role">
-                  <option value="user">user</option>
-                  <option value="admin">admin</option>
+                  <option value="user">一般</option>
+                  <option value="admin">管理者</option>
+                </select>
+              </div>
+              <div>
+                <label class="login-label">休憩ルール</label>
+                <select id="new-user-break-rule">
+                  <option value="standard">通常</option>
+                  <option value="always_1h">常に1時間</option>
                 </select>
               </div>
 
@@ -519,6 +526,7 @@
                     <th>ID</th>
                     <th>ユーザー</th>
                     <th>権限</th>
+                    <th>休憩ルール</th>
                     <th>状態</th>
                     <th>操作</th>
                   </tr>
@@ -1628,7 +1636,7 @@
         tbody.innerHTML = "";
 
         if (!users || users.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="5">ユーザーがいません</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="6">ユーザーがいません</td></tr>`;
           return;
         }
 
@@ -1636,20 +1644,27 @@
           const tr = document.createElement("tr");
           const isActive = !!u.is_active;
           const role = u.role || "user";
+          const breakRule = u.break_rule || "standard";
 
           tr.innerHTML = `
             <td>${u.id}</td>
             <td>${escapeHtml(u.name)}</td>
             <td>
               <select data-action="role" data-name="${escapeHtml(u.name)}">
-                <option value="user" ${role === "user" ? "selected" : ""}>user</option>
-                <option value="admin" ${role === "admin" ? "selected" : ""}>admin</option>
+                <option value="user" ${role === "user" ? "selected" : ""}>一般</option>
+                <option value="admin" ${role === "admin" ? "selected" : ""}>管理者</option>
+              </select>
+            </td>
+            <td>
+              <select data-action="break_rule" data-name="${escapeHtml(u.name)}">
+                <option value="standard" ${breakRule === "standard" ? "selected" : ""}>通常</option>
+                <option value="always_1h" ${breakRule === "always_1h" ? "selected" : ""}>常に1時間</option>
               </select>
             </td>
             <td>
               <select data-action="active" data-name="${escapeHtml(u.name)}">
-                <option value="true" ${isActive ? "selected" : ""}>active</option>
-                <option value="false" ${!isActive ? "selected" : ""}>inactive</option>
+                <option value="true" ${isActive ? "selected" : ""}>有効</option>
+                <option value="false" ${!isActive ? "selected" : ""}>無効</option>
               </select>
             </td>
             <td style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -1664,6 +1679,7 @@
         const name = document.getElementById("new-user-name").value.trim();
         const pin = document.getElementById("new-user-pin").value.trim();
         const role = document.getElementById("new-user-role").value.trim();
+        const break_rule = document.getElementById("new-user-break-rule").value.trim();
 
         if (!name || !pin) {
           setUserStatus("ユーザー名とPINを入力してください", "error");
@@ -1674,7 +1690,7 @@
         const res = await fetchWithAuth("/admin/users", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({name, pin, role}),
+          body: JSON.stringify({name, pin, role, break_rule}),
         });
         if (!res) return;
 
@@ -1723,6 +1739,13 @@
           setUserStatus("状態を更新中...");
           const is_active = target.value === "true";
           await updateUser({ name, is_active });
+          setUserStatus("更新しました", "ok");
+          return;
+        }
+
+        if (action === "break_rule") {
+          setUserStatus("休憩ルールを更新中...");
+          await updateUser({ name, break_rule: target.value });
           setUserStatus("更新しました", "ok");
           return;
         }

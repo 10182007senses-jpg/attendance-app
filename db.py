@@ -15,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Date,
     text,
+    or_,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.engine import Engine
@@ -72,6 +73,7 @@ class User(Base):
     pin_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    break_rule: Mapped[str] = mapped_column(String(30), default="standard", nullable=False)
 
     required_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=160)
     max_work_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -194,6 +196,11 @@ def init_db() -> None:
     eng = init_engine()
     Base.metadata.create_all(bind=eng)
     inspector = inspect(eng)
+    if inspector.has_table("users"):
+        columns = {col["name"] for col in inspector.get_columns("users")}
+        if "break_rule" not in columns:
+            with eng.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN break_rule VARCHAR(30) DEFAULT 'standard'"))
     if inspector.has_table("workdays"):
         columns = {col["name"] for col in inspector.get_columns("workdays")}
         if "employee_note" not in columns:
@@ -203,6 +210,10 @@ def init_db() -> None:
     try:
         db.query(User).filter(User.required_hours.is_(None)).update(
             {User.required_hours: 160},
+            synchronize_session=False,
+        )
+        db.query(User).filter(or_(User.break_rule.is_(None), User.break_rule == "")).update(
+            {User.break_rule: "standard"},
             synchronize_session=False,
         )
         db.commit()
