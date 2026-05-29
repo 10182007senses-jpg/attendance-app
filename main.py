@@ -842,6 +842,11 @@ class AdminFillMissingLogRequest(BaseModel):
   type: str
   time: str
 
+class AdminWorkdayNoteRequest(BaseModel):
+  user_id: int
+  date: str
+  note: str = ""
+
 class MonthConfirmRequest(BaseModel):
   month: str
 
@@ -1234,6 +1239,35 @@ def admin_fill_missing_log(
 
   result = recalc_workday(db, log.user_id, log.ts.date())
   return {"ok": True, "log_id": log.id, "result": result}
+
+@app.post("/admin/workday-note")
+def admin_save_workday_note(
+  body: AdminWorkdayNoteRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db),
+):
+  user = db.query(User).filter(User.id == body.user_id, User.is_active == True).one_or_none()
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+
+  try:
+    target_date = datetime.strptime(body.date, "%Y-%m-%d").date()
+  except ValueError as exc:
+    raise HTTPException(
+      status_code=status.HTTP_400_BAD_REQUEST,
+      detail="date は YYYY-MM-DD 形式で指定してください",
+    ) from exc
+
+  if len(body.note) > 500:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="note は 500 文字以内で指定してください")
+
+  note = body.note
+  wd = _ensure_workday(db, body.user_id, target_date)
+  wd.employee_note = note or None
+  wd.updated_at = now_jst_naive()
+  invalidate_month_confirmation(db, body.user_id, datetime.combine(target_date, time.min))
+  db.commit()
+  return {"ok": True, "note": note}
 
 
 @app.post("/logout")

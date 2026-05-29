@@ -243,6 +243,28 @@
         font-size: 12px;
         color: var(--muted);
       }
+      .note-cell {
+        min-width: 220px;
+      }
+      .note-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .note-input {
+        width: 100%;
+        min-height: 72px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid #d6c4a7;
+        resize: vertical;
+        font: inherit;
+      }
+      .note-system {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
       .action-toggle {
         background: none;
         border: none;
@@ -557,6 +579,7 @@
                     <th>開始</th>
                     <th>終了</th>
                     <th>実働</th>
+                    <th>備考</th>
                     <th>打刻</th>
                   </tr>
                 </thead>
@@ -997,6 +1020,9 @@
           date,
           ok: false,
           error: null,
+          system_note: null,
+          employee_note: "",
+          remark: "",
           start: null,
           end: null,
           net: "-",
@@ -1074,6 +1100,19 @@
         `;
       }
 
+      function renderNoteEditor(day, userId) {
+        if (!userId) return "-";
+        const employeeNote = escapeHtml(day.employee_note || "");
+        const systemNote = day.system_note ? `<div class="note-system">自動メモ: ${escapeHtml(day.system_note)}</div>` : "";
+        return `
+          <div class="note-editor">
+            <textarea class="note-input" data-role="note-input" maxlength="500">${employeeNote}</textarea>
+            <button class="mini-btn" data-action="save-note" data-date="${day.date}" data-user-id="${userId}">備考保存</button>
+            ${systemNote}
+          </div>
+        `;
+      }
+
       function renderActionList(actions, date) {
         return `
           <div class="action-list">
@@ -1111,7 +1150,7 @@
         table.innerHTML = "";
 
         if (!data || !data.details || data.details.length === 0) {
-          table.innerHTML = "<tr><td colspan=\"5\">詳細がありません。</td></tr>";
+          table.innerHTML = "<tr><td colspan=\"6\">詳細がありません。</td></tr>";
           if (summaryEl) summaryEl.innerText = "";
           updateMap([]);
           return;
@@ -1155,6 +1194,7 @@
             <td>${day.start || "-"}</td>
             <td>${day.end || "-"}</td>
             <td>${day.net}</td>
+            <td class="note-cell">${renderNoteEditor(day, data.user_id)}</td>
             <td>
               <div class="action-cell">
                 <div class="action-text">${displayActions}</div>
@@ -1170,6 +1210,27 @@
         if (summaryEl) {
           summaryEl.innerText = `全${data.details.length}日（打刻あり:${daysWithLogs} / OK:${okCount} / 不整合:${ngCount}）`;
         }
+      }
+
+      async function saveAdminWorkdayNote(userId, date, note) {
+        const res = await fetchWithAuth("/admin/workday-note", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: Number(userId),
+            date,
+            note,
+          }),
+        });
+        if (!res) return false;
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          alert(data.detail || data.error || "備考の保存に失敗しました");
+          return false;
+        }
+        await loadUserDetail();
+        setStatus("備考を保存しました", "ok");
+        return true;
       }
 
       async function loadUserDetail() {
@@ -1503,6 +1564,24 @@
             return;
           }
           updateLog(logId, date, time);
+          return;
+        }
+
+        if (target.dataset.action === "save-note") {
+          const userId = Number(target.dataset.userId);
+          const date = target.dataset.date;
+          const wrap = target.closest(".note-editor");
+          const input = wrap ? wrap.querySelector("textarea[data-role='note-input']") : null;
+          const note = input ? input.value : "";
+          if (!date) {
+            alert("対象日が不正です");
+            return;
+          }
+          if (note.length > 500) {
+            alert("備考は500文字以内で入力してください");
+            return;
+          }
+          saveAdminWorkdayNote(userId, date, note);
           return;
         }
 
