@@ -847,6 +847,10 @@ class AdminWorkdayNoteRequest(BaseModel):
   date: str
   note: str = ""
 
+class AdminWorkdayDeleteRequest(BaseModel):
+  user_id: int
+  date: str
+
 class MonthConfirmRequest(BaseModel):
   month: str
 
@@ -1268,6 +1272,47 @@ def admin_save_workday_note(
   invalidate_month_confirmation(db, body.user_id, datetime.combine(target_date, time.min))
   db.commit()
   return {"ok": True, "note": note}
+
+@app.post("/admin/workday/delete")
+def admin_delete_workday(
+  body: AdminWorkdayDeleteRequest,
+  admin: User = Depends(require_admin),
+  db: Session = Depends(get_db),
+):
+  user = db.query(User).filter(User.id == body.user_id, User.is_active == True).one_or_none()
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+
+  try:
+    target_date = datetime.strptime(body.date, "%Y-%m-%d").date()
+  except ValueError as exc:
+    raise HTTPException(
+      status_code=status.HTTP_400_BAD_REQUEST,
+      detail="date は YYYY-MM-DD 形式で指定してください",
+    ) from exc
+
+  day_start = datetime.combine(target_date, time.min)
+  day_end = day_start + timedelta(days=1)
+
+  (
+    db.query(AttendanceLog)
+    .filter(
+      AttendanceLog.user_id == body.user_id,
+      AttendanceLog.ts >= day_start,
+      AttendanceLog.ts < day_end,
+      AttendanceLog.action.in_(ACTIONS),
+    )
+    .delete(synchronize_session=False)
+  )
+
+  wd = db.query(Workday).filter(Workday.user_id == body.user_id, Workday.date == target_date).one_or_none()
+  if wd is not None:
+    db.delete(wd)
+
+  invalidate_month_confirmation(db, body.user_id, day_start)
+  db.commit()
+  recalc_workday(db, body.user_id, target_date)
+  return {"ok": True}
 
 
 @app.post("/logout")

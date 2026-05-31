@@ -55,6 +55,14 @@
         width: 100%;
         min-width: 0;
       }
+      .detail-panel-main {
+        grid-column: 1 / -1;
+        order: -1;
+      }
+      .detail-panel-main .table-wrap table {
+        width: 100%;
+        min-width: 920px;
+      }
       .status {
         margin-top: 10px;
         font-size: 14px;
@@ -560,7 +568,7 @@
         </div>
 
 
-        <div class="panel">
+        <div class="panel detail-panel-main">
           <div class="detail-panel-header">
             <p class="panel-title">ユーザー詳細</p>
             <div class="detail-panel-actions">
@@ -1100,6 +1108,18 @@
         `;
       }
 
+      function renderWorkdayDeleteControls(day, userId) {
+        if (!userId) return "";
+        const hasLogs = (day.action || []).length > 0;
+        const hasEmployeeNote = Boolean(day.employee_note);
+        if (!hasLogs && !hasEmployeeNote) return "";
+        return `
+          <div class="full-day-add">
+            <button class="mini-btn secondary" data-action="delete-workday" data-date="${day.date}" data-user-id="${userId}">1日削除</button>
+          </div>
+        `;
+      }
+
       function renderNoteEditor(day, userId) {
         if (!userId) return "-";
         const employeeNote = escapeHtml(day.employee_note || "");
@@ -1200,6 +1220,7 @@
                 <div class="action-text">${displayActions}</div>
                 ${renderFullDayAddControls(key, data.user_id, day.action || [])}
                 ${renderMissingLogControls(day, data.user_id)}
+                ${renderWorkdayDeleteControls(day, data.user_id)}
                 ${showToggle ? `<button class="action-toggle" data-action="toggle-action" data-date="${key}">${toggleLabel}</button>` : ""}
               </div>
             </td>
@@ -1230,6 +1251,33 @@
         }
         await loadUserDetail();
         setStatus("備考を保存しました", "ok");
+        return true;
+      }
+
+      async function deleteAdminWorkday(userId, date) {
+        if (!confirm(`${date} のログと備考を削除します。よろしいですか？`)) {
+          return false;
+        }
+        setStatus("1日分を削除中...");
+        const res = await fetchWithAuth("/admin/workday/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: Number(userId),
+            date,
+          }),
+        });
+        if (!res) return false;
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          alert(data.detail || data.error || "1日分の削除に失敗しました");
+          return false;
+        }
+        editingLogId = null;
+        addingFullDayDate = null;
+        fillingMissingDate = null;
+        await loadUserDetail();
+        setStatus("1日分を削除しました", "ok");
         return true;
       }
 
@@ -1582,6 +1630,17 @@
             return;
           }
           saveAdminWorkdayNote(userId, date, note);
+          return;
+        }
+
+        if (target.dataset.action === "delete-workday") {
+          const userId = Number(target.dataset.userId);
+          const date = target.dataset.date;
+          if (!date) {
+            alert("対象日が不正です");
+            return;
+          }
+          deleteAdminWorkday(userId, date);
           return;
         }
 
