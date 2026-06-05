@@ -1,3 +1,4 @@
+import os
 from db import SessionLocal, init_db, User
 from security import hash_pin
 
@@ -12,7 +13,10 @@ def seed_users(db):
             u = User(name=name, pin_hash=hash_pin(pin), role=role, is_active=True)
             db.add(u)
 
-    upsert_user("瀬良 学", "0000", role="admin")
+    admin_name = os.environ.get("SEED_ADMIN_NAME")
+    admin_pin = os.environ.get("SEED_ADMIN_PIN", "0000")
+    if admin_name:
+        upsert_user(admin_name, admin_pin, role="admin")
 
     db.commit()
     print("seed ok")

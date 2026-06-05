@@ -163,7 +163,7 @@ def build_user_month_xlsx(
   ws["A1"].font = Font(bold=True, size=14)
   ws.merge_cells("A1:D1")
   ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-  ws["E1"] = "Quesera Grace 株式会社"
+  ws["E1"] = os.environ.get("COMPANY_NAME", "")
   ws["E1"].font = Font(bold=True, size=12)
   ws.merge_cells("E1:G1")
   ws["E1"].alignment = Alignment(horizontal="center", vertical="center")

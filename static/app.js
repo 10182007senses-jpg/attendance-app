@@ -133,7 +133,6 @@
 	        }
       }
 
-	      const DEFAULT_USER = "瀬良 仁";
 	      const STATE_NOT_IN = "未入室";
 	      const STATE_IN_ROOM = "在室中";
 	      const STATE_UNKNOWN = "不明";

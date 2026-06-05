@@ -8,3 +8,6 @@ attendance_log.csv
 *.code-workspace
 
 .DS_Store
+
+.env
+.env.*
