@@ -201,7 +201,7 @@ def build_user_month_xlsx(
     ws.cell(row=header_row, column=i, value=h)
 
   _set_col_width(ws, {
-    1: 12, 2: 16, 3: 16, 4: 14, 5: 32
+    1: 12, 2: 16, 3: 16, 4: 14, 5: 40
   })
 
   _style_range(ws, f"A{header_row}:E{header_row}", bold=True, fill=True, center=True)
@@ -246,12 +246,11 @@ def build_user_month_xlsx(
     ws.cell(row=row, column=5, value=remark)
     
     _style_range(ws, f"A{row}:E{row}", center=False)
-    ws.row_dimensions[row].height = 15
     note = str(remark) if remark else ""
-    note_len = len(note)
-    ws[f"E{row}"].alignment = Alignment(vertical="top", wrap_text=True, shrink_to_fit=(note_len > 80))
-    if note_len >= 20:
-      ws.row_dimensions[row].height = 24
+    ws[f"E{row}"].alignment = Alignment(vertical="top", wrap_text=True)
+    if not note:
+      ws.row_dimensions[row].height = 15
+    # 備考ありの行は高さを固定しない（アプリ側が折り返し内容に応じて自動調整するため）
     if not ok and err:
       for c in ws[f"A{row}:E{row}"][0]:
         c.fill = PatternFill("solid", fgColor="FCE4D6")
@@ -298,26 +297,6 @@ def build_user_month_xlsx(
   ws[f"A{sign_row}"].alignment = label_align
   ws[f"A{sign_row+2}"].alignment = label_align
   _set_outer_border(ws, f"A{sign_row}:E{sign_row+2}")
-
-  note_col = None
-  for c in range(1, 30):
-    if ws.cell(row=header_row, column=c).value == "備考":
-      note_col = c
-      break
-  if note_col is not None and data_end_row >= data_start_row:
-    note_letter = get_column_letter(note_col)
-    base_width = ws.column_dimensions[note_letter].width
-    ws.column_dimensions[note_letter].width = (base_width + 8) if base_width else 36
-    for c in ws[header_row]:
-      a = c.alignment or Alignment()
-      c.alignment = a.copy(wrap_text=False)
-    for r in range(data_start_row, data_end_row + 1):
-      note_cell = ws.cell(r, note_col)
-      a = note_cell.alignment or Alignment()
-      note_cell.alignment = a.copy(wrap_text=True, vertical="top")
-      note_len = len(str(note_cell.value or ""))
-      if note_len >= 20:
-        ws.row_dimensions[r].height = 24
 
   ws2 = wb.create_sheet("生ログ")
   ws2.freeze_panes = "A2"
