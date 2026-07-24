@@ -25,7 +25,8 @@ from seed_users import seed_users
 
 SESSION_RETENTION_DAYS = 30
 DEFAULT_USER = "山田太郎"
-SESSION_TTL_HOURS = 8       
+SESSION_TTL_HOURS = 8        # サーバー側セッションの有効期限。アクセスのたびにスライド更新される
+COOKIE_MAX_AGE_SECONDS = SESSION_RETENTION_DAYS * 24 * 3600  # Cookie自体はこれより先に消えないようにする（実際の失効判定はサーバー側で行う）
 IDLE_TIMEOUT_MINUTES = 1000  
 
 
@@ -51,6 +52,13 @@ BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 FILL_HEADER = PatternFill("solid", fgColor="F2F2F2")
 
 app = FastAPI()
+
+
+@app.middleware("http")
+async def no_cache_middleware(request, call_next):
+  response = await call_next(request)
+  response.headers["Cache-Control"] = "no-store"
+  return response
 bearer_scheme = HTTPBearer(auto_error=False)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -554,7 +562,7 @@ def get_last_action_db(db: Session, user_name:str) -> str | None:
   last = (
     db.query(AttendanceLog)
     .filter(AttendanceLog.user_id == user_id, AttendanceLog.action.in_(ACTIONS))
-    .order_by(AttendanceLog.ts.desc())
+    .order_by(AttendanceLog.ts.desc(), AttendanceLog.id.desc())
     .first()
   )
   # Returns None when the user has no logs or doesn't exist.
@@ -596,7 +604,7 @@ def get_current_state_db(db: Session, user_name: str):
   last = (
     db.query(AttendanceLog)
     .filter(AttendanceLog.user_id == user_id, AttendanceLog.action.in_(ACTIONS))
-    .order_by(AttendanceLog.ts.desc())
+    .order_by(AttendanceLog.ts.desc(), AttendanceLog.id.desc())
     .first()
   )
 
@@ -879,7 +887,7 @@ def normalize_break_rule(break_rule: str | None) -> str:
 def get_current_user(session_id: str | None = Depends(get_session_id_from_cookie) , db: Session = Depends(get_db)):
   if not session_id:
     return None
-  
+
   now = now_jst_naive()
 
   s = (
@@ -887,23 +895,33 @@ def get_current_user(session_id: str | None = Depends(get_session_id_from_cookie
   )
 
   if not s:
+    print("[auth] fail: no session row for session_id=", session_id)
     return None
   if s.revoked:
+    print("[auth] fail: session revoked. session_id=", session_id, "user_id=", s.user_id)
     return None
   if s.expires_at <= now:
+    print("[auth] fail: session expired. session_id=", session_id, "user_id=", s.user_id,
+          "expires_at=", s.expires_at, "now=", now)
     s.revoked = True
     db.commit()
     return None
-  
+
   if s.last_seen_at and now - s.last_seen_at > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
+    print("[auth] fail: idle timeout. session_id=", session_id, "user_id=", s.user_id,
+          "last_seen_at=", s.last_seen_at, "now=", now)
     s.revoked = True
     db.commit()
     return None
-  
+
+  # スライド更新：アクセスがあるたびに有効期限を延長する（8時間の固定失効を防ぐ）
   s.last_seen_at = now
+  s.expires_at = now + timedelta(hours=SESSION_TTL_HOURS)
   db.commit()
 
   u = db.query(User).filter(User.id == s.user_id, User.is_active == True).one_or_none()
+  if u is None:
+    print("[auth] fail: user not found or inactive. user_id=", s.user_id)
   return u.name if u else None
 
 
@@ -1059,7 +1077,7 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     httponly=True,
     secure=bool(os.getenv("RENDER")),
     samesite="lax",
-    max_age=SESSION_TTL_HOURS * 3600,
+    max_age=COOKIE_MAX_AGE_SECONDS,
     path="/",
   )
 
@@ -1387,9 +1405,9 @@ def today_logs(user: str = Depends(get_current_user), db: Session = Depends(get_
 
 @app.get("/current-state")
 def current_state(user: str = Depends(get_current_user), db: Session = Depends(get_db),):
+  if user is None:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
   try:
-    if user is None:
-      return {"state": STATE_NOT_IN, "last_action": None, "lat": None, "lon": None, "time": None}
     return get_current_state_db(db, user)
   except Exception:
     return {"error": "状態の取得に失敗しました", "state": STATE_UNKNOWN}
