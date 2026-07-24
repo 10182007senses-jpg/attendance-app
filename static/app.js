@@ -1,4 +1,4 @@
-       function isLoggedIn() {
+function isLoggedIn() {
         return !!sessionStorage.getItem("user");
       }
 
@@ -231,6 +231,11 @@
       function updateButtons(state) {
         const btnIn = document.querySelector("button[onclick*='clock-in']");
         const btnOut = document.querySelector("button[onclick*='clock-out']");
+
+        if (!isLoggedIn()) {
+          [btnIn, btnOut].filter(Boolean).forEach(b => b.disabled = true);
+          return;
+        }
 
         [btnIn, btnOut].filter(Boolean).forEach(b => b.disabled = false);
 
@@ -608,28 +613,21 @@
 	        await bootstrapAuth();
 	        applyLoginState();
 	        updateTodayLabel();
-	        loadLogs();
-	        loadCurrentState();
-	        loadPreviousMonthSection();
 	      })();
 
       document.getElementById("save-today-note-btn")?.addEventListener("click", saveTodayNote);
 
     
 async function forceLogout(msg="セッションが切れました。再ログインしてください。") {
-  const session = sessionStorage.getItem("session")
-
   try {
-    if (session) {
-      await fetch("/logout", {
-        method: "POST",
-        headers: {"Authorization": `Bearer${session}`}
-      });
-    }
+    await fetch("/logout", {
+      method: "POST",
+      credentials: "include",
+    });
   } catch (_){
 
   } finally {
-      sessionStorage.removeItem("session");
+      sessionStorage.removeItem("role");
       sessionStorage.removeItem("user");
       setStatus(msg, "error");
       applyLoginState();
