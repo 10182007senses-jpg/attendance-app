@@ -159,13 +159,14 @@ def build_user_month_xlsx(
   ws.freeze_panes = "A9"
   ws.print_title_rows = f"{8}:{8}"
   ws.page_setup.paperSize = ws.PAPERSIZE_A4
-  ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+  ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
   ws.page_setup.fitToWidth = 1
-  ws.page_setup.fitToHeight = 0
+  ws.page_setup.fitToHeight = 1
+  ws.sheet_properties.pageSetUpPr.fitToPage = True
   ws.page_margins.left = 0.3
   ws.page_margins.right = 0.3
-  ws.page_margins.top = 0.5
-  ws.page_margins.bottom = 0.5
+  ws.page_margins.top = 0.35
+  ws.page_margins.bottom = 0.35
 
   ws["A1"] = "勤怠確認票（月次）"
   ws["A1"].font = Font(bold=True, size=14)
@@ -173,24 +174,20 @@ def build_user_month_xlsx(
   ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
   ws["E1"] = os.environ.get("COMPANY_NAME", "")
   ws["E1"].font = Font(bold=True, size=12)
-  ws.merge_cells("E1:G1")
   ws["E1"].alignment = Alignment(horizontal="center", vertical="center")
   ws.row_dimensions[1].height = 26
 
   # Header block
   ws["A3"] = "対象月"
   ws["C3"] = month
-  ws["E3"] = "氏名"
-  ws["F3"] = user
+  ws["E3"] = f"氏名：{user}"
   ws["A4"] = "所定労働時間"
   ws["C4"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
   ws.merge_cells("C3:D3")
   ws.merge_cells("C4:D4")
-  ws.merge_cells("F3:G3")
-  _style_range(ws, "A3:G4", bold=False, fill=True, center=False)
+  _style_range(ws, "A3:E4", bold=False, fill=True, center=False)
   _style_range(ws, "A3:A4", bold=True, fill=False, center=False)
-  _style_range(ws, "E3:E3", bold=True, fill=False, center=False)
-  _set_outer_border(ws, "A3:G4")
+  _set_outer_border(ws, "A3:E4")
   label_align = Alignment(horizontal="left", vertical="center", wrap_text=False)
   ws["A3"].alignment = label_align
   ws["A4"].alignment = label_align
@@ -199,18 +196,18 @@ def build_user_month_xlsx(
   ws.row_dimensions[4].height = 20
 
   header_row = 8
-  headers = ["日付", "入室(実打刻)", "退室(実打刻)", "入室(丸め後)", "退室(丸め後)", "実働時間", "備考"]
+  headers = ["日付", "入室(実打刻)", "退室(実打刻)", "実働時間", "備考"]
   for i, h in enumerate(headers, start=1):
     ws.cell(row=header_row, column=i, value=h)
 
   _set_col_width(ws, {
-    1: 12, 2: 16, 3: 16, 4: 16, 5: 16, 6: 14, 7: 28
+    1: 12, 2: 16, 3: 16, 4: 14, 5: 32
   })
 
-  _style_range(ws, f"A{header_row}:G{header_row}", bold=True, fill=True, center=True)
-  _set_outer_border(ws, f"A{header_row}:G{header_row}")
-  ws.row_dimensions[header_row].height = 20
-  for c in ws[f"A{header_row}:G{header_row}"][0]:
+  _style_range(ws, f"A{header_row}:E{header_row}", bold=True, fill=True, center=True)
+  _set_outer_border(ws, f"A{header_row}:E{header_row}")
+  ws.row_dimensions[header_row].height = 18
+  for c in ws[f"A{header_row}:E{header_row}"][0]:
     c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
 
   total_net_min = 0
@@ -245,22 +242,20 @@ def build_user_month_xlsx(
     ws.cell(row=row, column=1, value=d.get("date"))
     ws.cell(row=row, column=2, value=raw_in)
     ws.cell(row=row, column=3, value=raw_out)
-    ws.cell(row=row, column=4, value=(d.get("start") or ""))
-    ws.cell(row=row, column=5, value=(d.get("end") or ""))
-    ws.cell(row=row, column=6, value=(d.get("net") or ""))
-    ws.cell(row=row, column=7, value=remark)
+    ws.cell(row=row, column=4, value=(d.get("net") or ""))
+    ws.cell(row=row, column=5, value=remark)
     
-    _style_range(ws, f"A{row}:G{row}", center=False)
-    ws.row_dimensions[row].height = 18
+    _style_range(ws, f"A{row}:E{row}", center=False)
+    ws.row_dimensions[row].height = 15
     note = str(remark) if remark else ""
     note_len = len(note)
-    ws[f"G{row}"].alignment = Alignment(vertical="top", wrap_text=True, shrink_to_fit=(note_len > 80))
+    ws[f"E{row}"].alignment = Alignment(vertical="top", wrap_text=True, shrink_to_fit=(note_len > 80))
     if note_len >= 20:
-      ws.row_dimensions[row].height = 32
+      ws.row_dimensions[row].height = 24
     if not ok and err:
-      for c in ws[f"A{row}:G{row}"][0]:
+      for c in ws[f"A{row}:E{row}"][0]:
         c.fill = PatternFill("solid", fgColor="FCE4D6")
-        if c.column == 7:
+        if c.column == 5:
           c.font = Font(color="9C0006")
     row += 1
 
@@ -276,7 +271,7 @@ def build_user_month_xlsx(
   ws[f"D{sum_row+1}"] = actual_days
   ws[f"A{sum_row+2}"] = "不整合日数"
   ws[f"D{sum_row+2}"] = bad_days
-  ws[f"A{sum_row+3}"] = "実働合計(丸め後)"
+  ws[f"A{sum_row+3}"] = "実働合計"
   ws[f"D{sum_row+3}"] = f"{total_net_min//60}時間{total_net_min%60}分"
   ws[f"A{sum_row+4}"] = "所定労働時間(月)"
   ws[f"D{sum_row+4}"] = f"{scheduled_minutes//60}時間{scheduled_minutes%60}分"
@@ -294,18 +289,15 @@ def build_user_month_xlsx(
   ws.merge_cells(f"A{sign_row+2}:C{sign_row+2}")
   ws.merge_cells(f"D{sign_row+2}:E{sign_row+2}")
   ws[f"A{sign_row}"] = "本人署名："
-  ws[f"D{sign_row}"] = confirmed_name or " "
-  ws[f"F{sign_row}"] = "日付："
-  ws[f"G{sign_row}"] = confirmed_at.strftime("%Y/%m/%d") if confirmed_at else "____/____/____"
+  confirmed_date_str = confirmed_at.strftime("%Y/%m/%d") if confirmed_at else "____/____/____"
+  ws[f"D{sign_row}"] = f"{confirmed_name or ' '}　　日付：{confirmed_date_str}"
 
   ws[f"A{sign_row+2}"] = "管理者確認："
-  ws[f"D{sign_row+2}"] = " "
-  ws[f"F{sign_row+2}"] = "日付："
-  ws[f"G{sign_row+2}"] = "____/____/____"
-  _style_range(ws, f"A{sign_row}:G{sign_row+2}", bold=False, fill=False, center=False)
+  ws[f"D{sign_row+2}"] = "　　日付：____/____/____"
+  _style_range(ws, f"A{sign_row}:E{sign_row+2}", bold=False, fill=False, center=False)
   ws[f"A{sign_row}"].alignment = label_align
   ws[f"A{sign_row+2}"].alignment = label_align
-  _set_outer_border(ws, f"A{sign_row}:G{sign_row+2}")
+  _set_outer_border(ws, f"A{sign_row}:E{sign_row+2}")
 
   note_col = None
   for c in range(1, 30):
@@ -325,7 +317,7 @@ def build_user_month_xlsx(
       note_cell.alignment = a.copy(wrap_text=True, vertical="top")
       note_len = len(str(note_cell.value or ""))
       if note_len >= 20:
-        ws.row_dimensions[r].height = 32
+        ws.row_dimensions[r].height = 24
 
   ws2 = wb.create_sheet("生ログ")
   ws2.freeze_panes = "A2"
