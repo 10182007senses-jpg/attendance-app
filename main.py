@@ -532,7 +532,11 @@ def get_last_action_db(db: Session, user_name:str) -> str | None:
   
   last = (
     db.query(AttendanceLog)
-    .filter(AttendanceLog.user_id == user_id, AttendanceLog.action.in_(ACTIONS))
+    .filter(
+      AttendanceLog.user_id == user_id,
+      AttendanceLog.action.in_(ACTIONS),
+      AttendanceLog.ts <= now_jst_naive(),  # 有給の先行登録など、未来のログは「現在の状態」に影響させない
+    )
     .order_by(AttendanceLog.ts.desc(), AttendanceLog.id.desc())
     .first()
   )
@@ -574,7 +578,11 @@ def get_current_state_db(db: Session, user_name: str):
   
   last = (
     db.query(AttendanceLog)
-    .filter(AttendanceLog.user_id == user_id, AttendanceLog.action.in_(ACTIONS))
+    .filter(
+      AttendanceLog.user_id == user_id,
+      AttendanceLog.action.in_(ACTIONS),
+      AttendanceLog.ts <= now_jst_naive(),  # 有給の先行登録など、未来のログは「現在の状態」に影響させない
+    )
     .order_by(AttendanceLog.ts.desc(), AttendanceLog.id.desc())
     .first()
   )
