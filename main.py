@@ -673,26 +673,43 @@ def calc_work_time_db(db: Session, user_name: str):
 def calc_day_from_logs(day_logs: list[AttendanceLog], break_rule: str = BREAK_RULE_STANDARD) -> dict:
     if not day_logs:
       return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "ログなし", "start": None, "end": None}
-    
+
     day_logs = sorted(day_logs, key=lambda x : x.ts)
-  
+
     ins = [l.ts for l in day_logs if l.action == ACTION_IN]
     outs = [l.ts for l in day_logs if l.action == ACTION_OUT]
     if not ins or not outs:
       return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "入室または退室が不足", "start": (min(ins) if ins else None), "end": (max(outs) if outs else None)}
-    
+
     raw_start = min(ins)
     raw_end = max(outs)
-  
+
     start = ceil_time(raw_start, ROUND_MINUTES)
     end = floor_time(raw_end, ROUND_MINUTES)
-  
+
     if end < start:
       return {"ok": False, "gross_sec": 0, "break_sec": 0, "net_sec": 0, "error": "入退室時刻が不正", "start": start, "end": end}
-    
-    gross_sec = int((end-start).total_seconds())
-    if gross_sec < 0:
-      gross_sec = 0
+
+    # 同じ日に複数回出退勤した場合、「最初の入室〜最後の退室」を1区間として計算するのではなく、
+    # 入室・退室のペアごとに区切って、それぞれの実働時間を合算する。
+    # （例：9:00入室→12:00退室→13:00入室→18:00退室 なら 3時間+5時間=8時間。
+    #   途中の外出・休憩時間（12:00〜13:00）は自動的に除外される）
+    gross_sec = 0
+    open_start = None
+    for l in day_logs:
+      if l.action == ACTION_IN:
+        if open_start is None:
+          open_start = l.ts
+        # 入室が連続した場合（二重打刻など）は、最初の入室を区間の開始として扱う
+      elif l.action == ACTION_OUT:
+        if open_start is not None:
+          p_start = ceil_time(open_start, ROUND_MINUTES)
+          p_end = floor_time(l.ts, ROUND_MINUTES)
+          if p_end > p_start:
+            gross_sec += int((p_end - p_start).total_seconds())
+          open_start = None
+        # 対応する入室がない退室（不整合データ）は無視する
+
     if break_rule == BREAK_RULE_ALWAYS_1H:
       break_sec = 3600 if gross_sec > 0 else 0
     else:
