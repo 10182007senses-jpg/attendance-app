@@ -282,20 +282,44 @@ def build_user_month_xlsx(
     ws[f"D{r}"].alignment = Alignment(horizontal="right", vertical="center")
   _set_outer_border(ws, f"A{sum_row}:D{sum_row+4}")
 
-  sign_row = sum_row + 6
-  ws.merge_cells(f"A{sign_row}:C{sign_row}")
-  ws.merge_cells(f"D{sign_row}:E{sign_row}")
-  ws.merge_cells(f"A{sign_row+2}:C{sign_row+2}")
-  ws.merge_cells(f"D{sign_row+2}:E{sign_row+2}")
-  ws[f"A{sign_row}"] = "本人署名："
-  confirmed_date_str = confirmed_at.strftime("%Y/%m/%d") if confirmed_at else "____/____/____"
-  ws[f"D{sign_row}"] = f"{confirmed_name or ' '}　　日付：{confirmed_date_str}"
+  # 本人確認欄（管理者確認欄は設けない）
+  # 画面の「先月の勤務実績」確認ボタンと同じ文言を、対象月つきで表示する。
+  # 画面上で確認済みなら ☑ と確認者・確認日時を印字し、未確認なら ☐ と手書き用の空欄を出す。
+  try:
+    y_str, m_str = str(month).split("-")[:2]
+    month_label = f"{int(y_str)}年{int(m_str)}月"
+  except Exception:
+    month_label = "当月"
+  is_confirmed = confirmed_at is not None
+  check_mark = "☑" if is_confirmed else "☐"
 
-  ws[f"A{sign_row+2}"] = "管理者確認："
-  ws[f"D{sign_row+2}"] = "　　日付：____/____/____"
+  sign_row = sum_row + 6
+  ws.merge_cells(f"A{sign_row}:E{sign_row}")
+  ws[f"A{sign_row}"] = "本人確認"
+  ws.merge_cells(f"A{sign_row+1}:E{sign_row+1}")
+  ws[f"A{sign_row+1}"] = (
+    f"{check_mark}　私は{month_label}の勤怠記録、実際の労働時間、時間外労働時間を確認し、"
+    "申告漏れや相違がないことを確認しました"
+  )
+  ws.merge_cells(f"A{sign_row+2}:E{sign_row+2}")
+  if is_confirmed:
+    ws[f"A{sign_row+2}"] = (
+      f"確認者：{confirmed_name or user}　　"
+      f"確認日時：{confirmed_at.strftime('%Y/%m/%d %H:%M')}（勤怠システム上で確認済み）"
+    )
+  else:
+    ws[f"A{sign_row+2}"] = "確認者：＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿　　確認日：＿＿＿＿/＿＿/＿＿　（未確認）"
+
   _style_range(ws, f"A{sign_row}:E{sign_row+2}", bold=False, fill=False, center=False)
-  ws[f"A{sign_row}"].alignment = label_align
-  ws[f"A{sign_row+2}"].alignment = label_align
+  ws[f"A{sign_row}"].font = Font(bold=True)
+  ws[f"A{sign_row}"].fill = PatternFill("solid", fgColor="F2F2F2")
+  ws[f"A{sign_row}"].alignment = Alignment(horizontal="center", vertical="center")
+  ws[f"A{sign_row+1}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+  ws[f"A{sign_row+2}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+  # 結合セルは自動で高さが決まらないため、折り返し2行分を見込んで固定する
+  ws.row_dimensions[sign_row].height = 20
+  ws.row_dimensions[sign_row+1].height = 38
+  ws.row_dimensions[sign_row+2].height = 24
   _set_outer_border(ws, f"A{sign_row}:E{sign_row+2}")
 
   ws2 = wb.create_sheet("生ログ")
