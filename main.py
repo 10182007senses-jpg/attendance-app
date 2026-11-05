@@ -298,7 +298,7 @@ def build_user_month_xlsx(
   ws[f"A{sign_row}"] = "本人確認"
   ws.merge_cells(f"A{sign_row+1}:E{sign_row+1}")
   ws[f"A{sign_row+1}"] = (
-    f"{check_mark}　私は{month_label}の勤怠記録、実際の労働時間、時間外労働時間を確認し、"
+    f"{check_mark} 私は{month_label}の勤怠記録、実際の労働時間、時間外労働時間を確認し、\n"
     "申告漏れや相違がないことを確認しました"
   )
   ws.merge_cells(f"A{sign_row+2}:E{sign_row+2}")
@@ -318,8 +318,8 @@ def build_user_month_xlsx(
   ws[f"A{sign_row+2}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
   # 結合セルは自動で高さが決まらないため、折り返し2行分を見込んで固定する
   ws.row_dimensions[sign_row].height = 20
-  ws.row_dimensions[sign_row+1].height = 38
-  ws.row_dimensions[sign_row+2].height = 24
+  ws.row_dimensions[sign_row+1].height = 56
+  ws.row_dimensions[sign_row+2].height = 28
   _set_outer_border(ws, f"A{sign_row}:E{sign_row+2}")
 
   ws2 = wb.create_sheet("生ログ")
