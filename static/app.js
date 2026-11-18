@@ -1,3 +1,12 @@
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function isLoggedIn() {
         return !!sessionStorage.getItem("user");
       }
@@ -201,7 +210,7 @@ function isLoggedIn() {
           const loc = await getLocationOptional();
           const url = buildUrl(path, { lat: loc.lat, lon: loc.lon });
 
-          const res = await fetchWithAuth(url);
+          const res = await fetchWithAuth(url, { method: "POST" });
           if (!res) return;
           const data = await res.json();
           if (data.status === "ok") {
@@ -434,16 +443,16 @@ function isLoggedIn() {
 
 	        const rows = details.map(day => {
 	          const actions = (day.action || [])
-	            .map(action => `${action.action} ${action.time}`)
+	            .map(action => `${escapeHtml(action.action)} ${escapeHtml(action.time)}`)
 	            .join("<br>");
             const remark = day.remark || (!day.ok ? (day.error || "") : "");
 	          return `
 	            <tr>
-	              <td>${day.date || "-"}</td>
-	              <td>${day.start || "-"}</td>
-	              <td>${day.end || "-"}</td>
-	              <td>${day.net || "-"}</td>
-	              <td>${remark || "-"}</td>
+	              <td>${escapeHtml(day.date || "-")}</td>
+	              <td>${escapeHtml(day.start || "-")}</td>
+	              <td>${escapeHtml(day.end || "-")}</td>
+	              <td>${escapeHtml(day.net || "-")}</td>
+	              <td>${escapeHtml(remark || "-")}</td>
 	              <td>${actions || "-"}</td>
 	            </tr>
 	          `;
@@ -581,9 +590,9 @@ function isLoggedIn() {
           data.logs.forEach(log => {
             const row = document.createElement("tr");
             row.innerHTML = `
-              <td>${log.ユーザー}</td>
-              <td>${log.アクション}</td>
-              <td>${log.時刻}</td>
+              <td>${escapeHtml(log.ユーザー)}</td>
+              <td>${escapeHtml(log.アクション)}</td>
+              <td>${escapeHtml(log.時刻)}</td>
             `;
             table.appendChild(row);
           });
