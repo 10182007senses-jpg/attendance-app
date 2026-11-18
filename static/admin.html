@@ -415,9 +415,9 @@
         <div class="login-field">
           <input id="login-name" type="text" placeholder="例：管理 太郎" autocomplete="username" />
         </div>
-        <label class="login-label" for="login-pin">PIN (4桁)</label>
+        <label class="login-label" for="login-pin">PIN (4桁以上)</label>
         <div class="login-field">
-          <input id="login-pin" type="password" inputmode="numeric" maxlength="4" placeholder="例： 1234" autocomplete="one-time-code" />
+          <input id="login-pin" type="password" inputmode="numeric" maxlength="64" placeholder="PINを入力" autocomplete="one-time-code" />
         </div>
         <div class="login-actions">
           <button class="primary" onclick="login()">ログイン</button>
@@ -523,8 +523,8 @@
                 <input id="new-user-name" type="text" placeholder="例：山田 太郎" />
               </div>
               <div>
-                <label class="login-label">PIN (4桁など)</label>
-                <input id="new-user-pin" type="password" inputmode="numeric" />
+                <label class="login-label">PIN (6桁以上)</label>
+                <input id="new-user-pin" type="password" inputmode="numeric" minlength="6" maxlength="64" />
               </div>
               <div>
                 <label class="login-label">権限</label>
@@ -1896,7 +1896,7 @@
         const name = btn.dataset.name;
         if (!name) return;
 
-        const pin = prompt(`${name} の新しいPINを入力してください`);
+        const pin = prompt(`${name} の新しいPIN（6桁以上）を入力してください`);
         if (!pin) return;
 
         setUserStatus("PINを更新中...");

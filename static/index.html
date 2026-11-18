@@ -27,9 +27,9 @@
         <label class="login-label" for="login-name">ユーザー名</label>
         <div class="login-field">
           <input id="login-name" type="text" placeholder="例：山田太郎" autocomplete="username" />
-          <label class="login-label" for="login-pin">PIN (4桁)</label>
+          <label class="login-label" for="login-pin">PIN (4桁以上)</label>
           <div class="login-field">
-            <input id="login-pin" type="password" inputmode="numeric" maxlength="4" placeholder="例： 1234" autocomplete="one-time-code" />
+            <input id="login-pin" type="password" inputmode="numeric" maxlength="64" placeholder="PINを入力" autocomplete="one-time-code" />
           </div>
         </div>
         <div class="login-actions">
