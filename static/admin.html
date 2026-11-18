@@ -960,7 +960,7 @@
         rows.forEach(row => {
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            <td>${row.user}</td>
+            <td>${escapeHtml(row.user)}</td>
             <td>${row.work_days_with_logs}</td>
             <td>${row.ok_days}</td>
             <td>${row.inconsistent_days}</td>
@@ -1210,10 +1210,10 @@
 
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            <td>${day.date}</td>
-            <td>${day.start || "-"}</td>
-            <td>${day.end || "-"}</td>
-            <td>${day.net}</td>
+            <td>${escapeHtml(day.date)}</td>
+            <td>${escapeHtml(day.start || "-")}</td>
+            <td>${escapeHtml(day.end || "-")}</td>
+            <td>${escapeHtml(day.net)}</td>
             <td class="note-cell">${renderNoteEditor(day, data.user_id)}</td>
             <td>
               <div class="action-cell">

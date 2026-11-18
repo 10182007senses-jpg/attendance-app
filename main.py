@@ -8,17 +8,30 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, status, Cookie, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, Depends, HTTPException, status, Cookie, Response, Request
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from db import Session as DbSession, SessionLocal, init_db, User, AttendanceLog, Workday, UserMonthlyRequirement, MonthlyConfirmation, init_engine, Base, engine, now_jst_naive
-from security import verify_pin, hash_pin
+from mobile_bearer_v1 import mobile_v1_router
+from security import (
+  hash_pin,
+  hash_token,
+  new_session_token,
+  verify_pin_or_dummy,
+  validate_new_pin,
+  cookie_secure,
+  login_blocked,
+  record_login_failure,
+  clear_login_failures,
+  LOGIN_BLOCKED_MESSAGE,
+  PIN_MAX_LENGTH,
+)
 from seed_users import main as seed_main
 from seed_users import seed_users
 
@@ -27,7 +40,7 @@ SESSION_RETENTION_DAYS = 30
 DEFAULT_USER = "山田太郎"
 SESSION_TTL_HOURS = 8        # サーバー側セッションの有効期限。アクセスのたびにスライド更新される
 COOKIE_MAX_AGE_SECONDS = SESSION_RETENTION_DAYS * 24 * 3600  # Cookie自体はこれより先に消えないようにする（実際の失効判定はサーバー側で行う）
-IDLE_TIMEOUT_MINUTES = 1000  
+IDLE_TIMEOUT_MINUTES = 120  # 最後の操作から2時間でログアウト
 
 
 ACTION_IN = "入室"
@@ -52,12 +65,45 @@ BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 FILL_HEADER = PatternFill("solid", fgColor="F2F2F2")
 
 app = FastAPI()
+app.include_router(mobile_v1_router)
+
+
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _allowed_origins() -> set[str]:
+  raw = os.getenv("ALLOWED_ORIGINS", "")
+  return {o.strip().rstrip("/") for o in raw.split(",") if o.strip()}
 
 
 @app.middleware("http")
-async def no_cache_middleware(request, call_next):
+async def security_middleware(request: Request, call_next):
+  # CSRF 対策: Cookie 認証で状態を変えるリクエストは、同一オリジンからのものだけ受け付ける。
+  # Bearer 認証のモバイル API（/v1/）はブラウザの Cookie を使わないので対象外。
+  if request.method in UNSAFE_METHODS and not request.url.path.startswith("/v1/"):
+    origin = request.headers.get("origin")
+    if origin:
+      netloc = request.headers.get("host") or request.url.netloc
+      candidates = {f"{request.url.scheme}://{netloc}", f"https://{netloc}"}
+      if origin.rstrip("/") not in candidates | _allowed_origins():
+        return JSONResponse(status_code=403, content={"detail": "不正なリクエスト元です"})
+    elif request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+      return JSONResponse(status_code=403, content={"detail": "不正なリクエスト元です"})
+
   response = await call_next(request)
   response.headers["Cache-Control"] = "no-store"
+  response.headers["X-Content-Type-Options"] = "nosniff"
+  response.headers["X-Frame-Options"] = "DENY"
+  response.headers["Referrer-Policy"] = "same-origin"
+  response.headers["Permissions-Policy"] = "geolocation=(self), camera=(), microphone=()"
+  response.headers["Content-Security-Policy"] = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; "
+    "style-src 'self' 'unsafe-inline' https://unpkg.com; "
+    "img-src 'self' data: https://unpkg.com https://*.tile.openstreetmap.org; "
+    "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  )
+  if cookie_secure():
+    response.headers["Strict-Transport-Security"] = "max-age=31536000"
   return response
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -780,21 +826,21 @@ def get_acurrent_user_row(creds: HTTPAuthorizationCredentials | None = Depends(b
   session_id = creds.credentials
 
   now = now_jst_naive()
-  s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+  s = db.query(DbSession).filter(DbSession.id == hash_token(session_id)).one_or_none()
   if not s:
-    print("[auth] session not found:", session_id)
+    print("[auth] session not found:")
     return None
   if s.revoked:
-    print("[auth] session revoked:", session_id)
+    print("[auth] session revoked:")
     return None
   if s.expires_at <= now:
-    print("[auth] session expired:", session_id, "expires_at=", s.expires_at, "now=", now)
+    print("[auth] session expired:", "expires_at=", s.expires_at, "now=", now)
     s.revoked = True
     db.commit()
     return None
   
   if s.last_seen_at and (now - s.last_seen_at) > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
-    print("[auth] idle timeout:", session_id, "last_seen_at=", s.last_seen_at, "now=", now)
+    print("[auth] idle timeout:", "last_seen_at=", s.last_seen_at, "now=", now)
     s.revoked = True
     db.commit()
     return None
@@ -815,7 +861,7 @@ def get_current_user_row_from_cookie(
     return None
   
   now = now_jst_naive()
-  s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+  s = db.query(DbSession).filter(DbSession.id == hash_token(session_id)).one_or_none()
   if not s or s.revoked or s.expires_at <= now:
     if s and s.expires_at <= now:
       s.revoked = True
@@ -842,8 +888,8 @@ def require_admin(user: User | None = Depends(get_current_user_row_from_cookie))
   return user
 
 class LoginRequest(BaseModel):
-  user: str
-  pin:str
+  user: str = Field(max_length=100)
+  pin: str = Field(max_length=PIN_MAX_LENGTH)
 
 class AdminMonthlyHoursSaveRequest(BaseModel):
   user_id: int
@@ -911,24 +957,24 @@ def get_current_user(session_id: str | None = Depends(get_session_id_from_cookie
   now = now_jst_naive()
 
   s = (
-    db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+    db.query(DbSession).filter(DbSession.id == hash_token(session_id)).one_or_none()
   )
 
   if not s:
-    print("[auth] fail: no session row for session_id=", session_id)
+    print("[auth] fail: no session row")
     return None
   if s.revoked:
-    print("[auth] fail: session revoked. session_id=", session_id, "user_id=", s.user_id)
+    print("[auth] fail: session revoked.", "user_id=", s.user_id)
     return None
   if s.expires_at <= now:
-    print("[auth] fail: session expired. session_id=", session_id, "user_id=", s.user_id,
+    print("[auth] fail: session expired.", "user_id=", s.user_id,
           "expires_at=", s.expires_at, "now=", now)
     s.revoked = True
     db.commit()
     return None
 
   if s.last_seen_at and now - s.last_seen_at > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
-    print("[auth] fail: idle timeout. session_id=", session_id, "user_id=", s.user_id,
+    print("[auth] fail: idle timeout.", "user_id=", s.user_id,
           "last_seen_at=", s.last_seen_at, "now=", now)
     s.revoked = True
     db.commit()
@@ -1079,23 +1125,28 @@ def get_user_monthly_hours_map(db: Session, user_id: int, year: int) -> dict[str
   return data
 
 @app.post("/login")
-def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
-  user_name = req.user.strip()
+def login(req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+  user_name = req.user.strip()[:100]
   pin = req.pin.strip()
+  ip = request.client.host if request.client else "unknown"
+  now = now_jst_naive()
+
+  if login_blocked(user_name, ip, now):
+    return JSONResponse(status_code=429, content={"ok": False, "error": LOGIN_BLOCKED_MESSAGE})
 
   u = db.query(User).filter(User.name == user_name, User.is_active == True).one_or_none()
-  if not u:
+  if not verify_pin_or_dummy(pin, u.pin_hash if u else None):
+    record_login_failure(user_name, ip, now)
     return {"ok": False, "error": "認証に失敗しました"}
-  
-  if not verify_pin(pin, u.pin_hash):
-    return {"ok": False, "error": "認証に失敗しました"}
-  
-  session_id = secrets.token_hex(16)
+
+  clear_login_failures(user_name)
+
+  session_id = new_session_token()
   response.set_cookie(
     key="session",
     value=session_id,
     httponly=True,
-    secure=bool(os.getenv("RENDER")),
+    secure=cookie_secure(),
     samesite="lax",
     max_age=COOKIE_MAX_AGE_SECONDS,
     path="/",
@@ -1104,7 +1155,7 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
   now = now_jst_naive()
 
   s = DbSession(
-    id=session_id,
+    id=hash_token(session_id),
     user_id=u.id,
     created_at=now,
     expires_at=now + timedelta(hours=SESSION_TTL_HOURS),
@@ -1358,7 +1409,7 @@ def logout(response: Response, session_id: str | None = Depends(get_session_id_f
   if not session_id:
     return {"ok": True}
   
-  s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+  s = db.query(DbSession).filter(DbSession.id == hash_token(session_id)).one_or_none()
   if s:
     s.revoked = True
     db.commit()
@@ -1372,7 +1423,7 @@ def root():
     return FileResponse(INDEX_FILE)
   return {"message": "Attendance API is running"}
 
-@app.get("/clock-in")
+@app.post("/clock-in")
 def clock_in(user: str = Depends(get_current_user), lat: float = None, lon: float = None, db: Session = Depends(get_db),):
   if user is None:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
@@ -1390,7 +1441,7 @@ def clock_in(user: str = Depends(get_current_user), lat: float = None, lon: floa
     return {"error":"入室の記録に失敗しました。"}
 
   
-@app.get("/clock-out")
+@app.post("/clock-out")
 def clock_out(user: str = Depends(get_current_user), lat: float = None, lon: float = None, db: Session=Depends(get_db),):
   if user is None:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未ログイン")
@@ -1405,11 +1456,11 @@ def clock_out(user: str = Depends(get_current_user), lat: float = None, lon: flo
     print("clock_out error:", repr(e))
     return {"error": "退室の記録に失敗しました"}
 
-@app.get("/break-start")
+@app.post("/break-start")
 def break_start(user: str = Depends(get_current_user), lat: float = None, lon: float = None, db: Session = Depends(get_db),):
   raise HTTPException(status_code=410, detail="この機能は現在利用できません")
 
-@app.get("/break-end")
+@app.post("/break-end")
 def break_end(user: str = Depends(get_current_user), lat: float = None, lon: float = None, db: Session = Depends(get_db),):
   raise HTTPException(status_code=410, detail="この機能は現在利用できません")
 
@@ -1902,12 +1953,15 @@ def admin_create_user(req: AdminCreateUserRequest, admin: User = Depends(require
     raise HTTPException(status_code=400, detail="nameは必須です")
   if not pin:
     raise HTTPException(status_code=400, detail="pinは必須です")
+  pin_error = validate_new_pin(pin)
+  if pin_error:
+    raise HTTPException(status_code=400, detail=pin_error)
   if role not in ("user", "admin"):
     raise HTTPException(status_code=400, detail="roleは user または admin")
   
   exists = db.query(User).filter(User.name == name).one_or_none()
   if exists:
-    raise HTTPException(status_code=409, detail="同盟のユーザーが既に存在します")
+    raise HTTPException(status_code=409, detail="同名のユーザーが既に存在します")
   
   u = User(
     name=name,
@@ -1944,7 +1998,14 @@ def admin_update_user(req: AdminUpdateUserRequest, admin: User = Depends(require
     pin = req.pin.strip()
     if not pin:
       raise HTTPException(status_code=400, detail="pinが空です")
+    pin_error = validate_new_pin(pin)
+    if pin_error:
+      raise HTTPException(status_code=400, detail=pin_error)
     u.pin_hash = hash_pin(pin)
+    # PIN を変えたら既存セッションはすべて無効化する
+    db.query(DbSession).filter(DbSession.user_id == u.id, DbSession.revoked == False).update(
+      {DbSession.revoked: True}, synchronize_session=False
+    )
 
   if req.break_rule is not None:
     u.break_rule = normalize_break_rule(req.break_rule)
